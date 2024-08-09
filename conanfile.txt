@@ -1,0 +1,14 @@
+[requires]
+# List your dependencies here
+fmt/8.0.1
+boost/1.85.0
+
+[generators]
+CMakeToolchain
+CMakeDeps
+
+[layout]
+cmake_layout
+
+[options]
+# Specify any package options here
