@@ -1,10 +1,11 @@
 #include <iostream>
-#include "cache_.h"
-#include <threads>
+#include "cache_node.h"
+#include "cache.h"
+#include <thread>
 
 int main() {
-    Cache cache('192.168.1.1',4569);
-    CacheNode node(1024 * 1024, std::chrono::seconds(5)); // 1MB max memory, 5 seconds TTL
+    Cache cache= new Cache('192.168.1.1',4569);
+    CacheNode node = new CacheNode(1024 * 1024, std::chrono::seconds(5)); // 1MB max memory, 5 seconds TTL
     node.assignToCluster(cache.getClusterId(),/*cache ip*/,/*cache port*/,);
 
     cache.addNode({"192.168.1.1", 6379,node.getNodeId()});

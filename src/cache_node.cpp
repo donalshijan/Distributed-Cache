@@ -4,7 +4,9 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include "cache.h"
 
+#define PORT 8069
 
 CacheNode::CacheNode(size_t max_memory,std::chrono::seconds ttl, EvictionStrategy strategy) : max_memory_(max_memory), used_memory_(0), ttl_(ttl), strategy_(strategy) {
     boost::uuids::uuid uuid = boost::uuids::random_generator()();
@@ -48,7 +50,7 @@ void CacheNode::set(const std::string& key, const std::string& value) {
         }
     }
 
-std::string CacheNode::get(const std::string& key) const {
+std::string CacheNode::get(const std::string& key) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = store_.find(key);
      if (it != store_.end()) {
@@ -135,14 +137,14 @@ void CacheNode::remove(const std::string& key) {
     }
 }
 
-std::string Cache::getNodeId() const {
+std::string CacheNode::getNodeId() const {
     return node_id_;
 }
 
 void CacheNode::assignToCluster(const std::string& cluster_id, std::string& ip, int& port) {
-    this.cluster_manager_details_.cluster_id_ = cluster_id;
-    this.cluster_manager_details_.ip_=ip;
-    this.cluster_manager_details_.port_=port;
+    cluster_manager_details_.cluster_id_ = cluster_id;
+    cluster_manager_details_.ip_=ip;
+    cluster_manager_details_.port_=port;
 }
 
 
@@ -158,13 +160,13 @@ void CacheNode::handle_client(int client_socket) {
     std::string request(buffer);
     std::string response;
 
-    response=processRequest(const std::string& request);
+    response=processRequest(request);
 
     write(client_socket, response.c_str(), response.length());
     close(client_socket);
 }
 
-std::string CachNode::processRequest(const std::string& request) {
+std::string CacheNode::processRequest(const std::string& request) {
     size_t pos = 0;
 
     // Skip the command count prefix, e.g., "*2\r\n"

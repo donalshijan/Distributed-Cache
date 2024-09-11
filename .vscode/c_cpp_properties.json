@@ -3,6 +3,9 @@
         {
             "name": "Mac",
             "includePath": [
+                "/usr/local/include",
+                "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include",
+                "/opt/homebrew/opt/boost/include",
                 "${workspaceFolder}/**"
             ],
             "defines": [],

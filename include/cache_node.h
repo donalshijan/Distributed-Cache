@@ -1,5 +1,5 @@
-#ifndef CACHE_H
-#define CACHE_H
+#ifndef CACHE_NODE_H
+#define CACHE_NODE_H
 
 #include <string>
 #include <unordered_map>
@@ -29,10 +29,10 @@ class CacheNode {
 public:
     CacheNode(size_t max_memory, std::chrono::seconds ttl,EvictionStrategy strategy);
     // Set a key-value pair
-    void set(const size_t& key, const std::string& value);
+    void set(const std::string& key, const std::string& value);
 
     // Get a value by key
-    std::string get(const std::string& key) const;
+    std::string get(const std::string& key) ;
     std::string getNodeId() const;
     void assignToCluster(const std::string& cluster_id, std::string& ip, int& port);
     size_t getMaxMemory() const;
@@ -67,4 +67,4 @@ private:
     
 };
 
-#endif // CACHE_H
+#endif // CACHE_NODE_H

@@ -1,3 +1,4 @@
+#include "cache.h"
 #include <vector>
 #include <string>
 #include <boost/uuid/uuid.hpp>
@@ -12,24 +13,15 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
-struct NodeConnectionDetails {
-    std::string node_id;
-    std::string ip;
-    int port;
-};
 
-class Cache {
-private:
-    std::vector<NodeConnectionDetails> nodes_;
-    size_t next_node_ = 0;
-    std::hash<std::string> hasher_;
-    std::mutex mutex_;
-    std::string cluster_id_;
-    std::string ip_;
-    int port;
-    std::string node_id_being_deleted_;
+
+Cache::Cache(const std::string& ip, const int& port) : ip_(ip), port_(port) {
+        boost::uuids::uuid uuid = boost::uuids::random_generator()();
+        cluster_id_ = boost::uuids::to_string(uuid);
+    }
+
         // Helper function to send data over TCP/IP
-    void sendToNode(const std::string& ip, int port, const std::string& request) {
+    std::string Cache::sendToNode(const std::string& ip, int port, const std::string& request) {
         int sockfd = socket(AF_INET, SOCK_STREAM, 0);
         if (sockfd < 0) {
             throw std::runtime_error("Socket creation failed.");
@@ -49,20 +41,23 @@ private:
         }
 
         send(sockfd, request.c_str(), request.size(), 0);
+        // Receive the response
+        char buffer[1024] = {0};
+        int bytes_received = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
+        if (bytes_received < 0) {
+            close(sockfd);
+            throw std::runtime_error("Failed to receive response.");
+        }
         close(sockfd);
-    }
-public:
-    Cache(std::string& ip,int& port): ip_(ip), port_(port) {
-        boost::uuids::uuid uuid = boost::uuids::random_generator()();
-        cluster_id_ = boost::uuids::to_string(uuid);
+        return std::string(buffer, bytes_received);
     }
 
-    void addNode(const NodeConnectionDetails& node_connection_details) {
+    void Cache::addNode(const NodeConnectionDetails& node_connection_details) {
         std::lock_guard<std::mutex> lock(mutex_);
         //after migration completes
         nodes_.push_back(node_connection_details);
     }
-    void removeNode(const std::string& node_id) {
+    void Cache::removeNode(const std::string& node_id) {
 
         // Find the node with the matching node_id
         auto it = std::remove_if(nodes_.begin(), nodes_.end(),
@@ -94,7 +89,7 @@ public:
         }
     }
 
-    void migrateData(const std::string& node_id, const std::vector<std::string>& target_nodes) {
+    void Cache::migrateData(const std::string& node_id, const std::vector<std::string>& target_nodes) {
         // Construct the MIGRATE message
         std::string migrate_message = "MIGRATE " + node_id;
         for (const auto& target_node : target_nodes) {
@@ -112,7 +107,7 @@ public:
         return cluster_id_;
     }
 
-    void routeGetRequest(const std::string& request) {
+    void Cache::routeGetRequest(const std::string& request) {
         std::lock_guard<std::mutex> lock(mutex_);
         // Extract key from the request string
         size_t key_start = request.find("\r\n", 4) + 2;
@@ -130,7 +125,7 @@ public:
         throw std::runtime_error("Key does not belong to any node in the routing table.");
     }
 
-    void routeSetRequest(const std::string& request) {
+    void Cache::routeSetRequest(const std::string& request) {
         std::lock_guard<std::mutex> lock(mutex_);
         size_t num_nodes = nodes_.size();
         if (num_nodes == 0) {
@@ -155,7 +150,7 @@ public:
         std::cerr << "All nodes are currently being deleted or no nodes available." << std::endl;
     }
 
-    void get(const std::string& key){
+    void Cache::get(const std::string& key){
 
         std::lock_guard<std::mutex> lock(mutex_);
         
@@ -173,7 +168,7 @@ public:
         routeGetRequest(request);
 
     }
-    void set(const std::string& key, const std::string& value) {
+    void Cache::set(const std::string& key, const std::string& value) {
         std::lock_guard<std::mutex> lock(mutex_);
 
         // Ensure the key and value are not empty
@@ -190,4 +185,3 @@ public:
         routeSetRequest(request);
     }
     
-}
