@@ -7,9 +7,9 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 
 # Find Boost
 find_package(Boost REQUIRED)
-
 # Include Boost headers
 include_directories(${Boost_INCLUDE_DIRS})
+
 
 # Include Conan dependencies
 # include(${CMAKE_BINARY_DIR}/generators/conan_toolchain.cmake)
