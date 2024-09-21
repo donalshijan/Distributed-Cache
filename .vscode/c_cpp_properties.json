@@ -6,6 +6,7 @@
                 "/usr/local/include",
                 "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include",
                 "/opt/homebrew/opt/boost/include",
+                "${workspaceFolder}/tests",
                 "/opt/homebrew/opt/libnice",
                 "${workspaceFolder}/**"
             ],

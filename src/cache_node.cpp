@@ -7,11 +7,12 @@
 #include <future>
 #include <arpa/inet.h>
 
-#define PORT 8069
 
-CacheNode::CacheNode(size_t max_memory,std::chrono::seconds ttl, EvictionStrategy strategy,int port) : max_memory_(max_memory), used_memory_(0), ttl_(ttl), strategy_(strategy),port_(port) {
+
+CacheNode::CacheNode(size_t max_memory,std::chrono::seconds ttl, EvictionStrategy strategy,std::string ip,int port) : max_memory_(max_memory), used_memory_(0), ttl_(ttl), strategy_(strategy),ip_(ip),port_(port) {
     boost::uuids::uuid uuid = boost::uuids::random_generator()();
     node_id_ = boost::uuids::to_string(uuid);
+    std::cout << "Cache Node created with node id : "<<node_id_<< std::endl;
 }
 
 std::string CacheNode::set(const std::string& key, const std::string& value) {
@@ -222,10 +223,11 @@ std::string CacheNode::getNodeId() const {
     return node_id_;
 }
 
-void CacheNode::assignToCluster(const std::string& cluster_id, std::string& ip, int& port) {
+void CacheNode::assignToCluster(const std::string& cluster_id, std::string& cluster_manager_ip, int& cluster_manager_port) {
     cluster_manager_details_.cluster_id_ = cluster_id;
-    cluster_manager_details_.ip_=ip;
-    cluster_manager_details_.port_=port;
+    cluster_manager_details_.ip_=cluster_manager_ip;
+    cluster_manager_details_.port_=cluster_manager_port;
+    addNodeToCluster(cluster_manager_details_.ip_,cluster_manager_details_.port_);
 }
 
 
@@ -247,7 +249,7 @@ void CacheNode::handle_client(int client_socket) {
     close(client_socket);
 }
 
-std::string Cache::sendToNode(const std::string& ip, int port, const std::string& request) {
+std::string CacheNode::sendToNode(const std::string& ip, int port, const std::string& request) {
         int sockfd = socket(AF_INET, SOCK_STREAM, 0);
         if (sockfd < 0) {
             throw std::runtime_error("Socket creation failed.");
@@ -285,12 +287,13 @@ std::string CacheNode::processRequest(const std::string& request) {
     pos = request.find("\r\n");
 
     if (pos != std::string::npos) {
-        pos += 2; // Move past "\r\n"
+        pos += 6; // Move past "\r\n$_\r\n"
     }
+    
 
     // Parse the command
     if(request.substr(pos, 7)=="MIGRATE"){
-        pos += 8; // Move past "MIGRATE\r\n"
+        pos += 9; // Move past "MIGRATE\r\n"
 
         // Parse source node ID length and node ID
         size_t node_id_length_start = request.find("$", pos) + 1;
@@ -303,8 +306,9 @@ std::string CacheNode::processRequest(const std::string& request) {
         pos += node_id_length + 2; // Move past node ID and "\r\n"
 
         // Parse target nodes list
-        size_t target_count_start = pos;
-        int target_count = std::stoi(request.substr(pos, request.find("\r\n", target_count_start) - target_count_start));
+        size_t target_count_start = request.find("*", pos) + 1; // Skip the "*"
+        size_t target_count_end = request.find("\r\n", target_count_start); // Find end of the line
+        int target_count = std::stoi(request.substr(target_count_start, target_count_end - target_count_start)); 
 
         pos += std::to_string(target_count).length() + 2; // Move past target count
 
@@ -343,8 +347,17 @@ std::string CacheNode::processRequest(const std::string& request) {
 
             // Send to the current target node
             const auto& target_node = target_nodes[target_index];
-            sendToNode(target_node.first, target_node.second, set_message.str());
+            try {
+                // Call the sendToNode method and store the return message.
+                std::string response = sendToNode(target_node.first, target_node.second, set_message.str());
 
+                // Process the response if no exception was thrown.
+                std::cout << "Set Message sent successfully. Response: " << response << std::endl;
+
+            } catch (const std::exception& e) {
+                // Handle the error if an exception is thrown.
+                std::cerr << "Failed to send set message to node: " << e.what() << std::endl;
+            }
             // Move to the next target node (round-robin)
             target_index = (target_index + 1) % target_nodes.size();
         }
@@ -364,8 +377,15 @@ std::string CacheNode::processRequest(const std::string& request) {
         std::string key = request.substr(pos, key_length);
         
         pos += key_length + 2; // Move past key and "\r\n"
-
-        return get(key);
+        std::string value = get(key);
+        // Check if the value is empty
+        if (value.empty()) {
+            // Return Redis-like nil response
+            return "$-1\r\n";
+        } else {
+            // Return Redis-like bulk string with value size
+            return "$" + std::to_string(value.size()) + "\r\n" + value + "\r\n";
+        }
 
     } else if (request.substr(pos, 3) == "SET") {
         // Process SET request here (code provided earlier)
@@ -478,18 +498,73 @@ void CacheNode::lazyDeleteStaleEntry() {
     }
 }
 
+void CacheNode::addNodeToCluster(const std::string& cluster_manager_ip, int cluster_manager_port) {
+    // Format: *2\r\n$3\r\nADD\r\n$<ip_length>\r\n<ip>\r\n$<port_length>\r\n<port>\r\n
+
+    // Node's IP and Port
+    std::string node_ip = this->ip_; // Assuming you have this stored in the node
+    int node_port = this->port_;     // Assuming you have this stored in the node
+
+    // Construct the message according to our custom protocol
+    std::stringstream message;
+    message << "*2\r\n"                   // Command count
+            << "$3\r\nADD\r\n"            // Command
+            << "$" << node_ip.size() << "\r\n" << node_ip << "\r\n" // IP of the node
+            << "$" << std::to_string(node_port).size() << "\r\n" << node_port << "\r\n"; // Port of the node
+
+    // Send the message to the cluster manager
+    std::string response;
+
+    try{
+        response=sendToNode(cluster_manager_ip, cluster_manager_port, message.str());
+    }catch (const std::runtime_error& e) {
+    // Log the error and return the original error message
+        std::cerr << "Error: " << e.what() << std::endl;
+    }
+    
+    std::string expected_prefix = "+OK Node Added\r\n";
+    if (response.substr(0, expected_prefix.size()) == expected_prefix){
+        // Extract the UUID, which comes right after the prefix
+        std::string uuid = response.substr(expected_prefix.size());
+
+        // Output the message with the UUID
+        std::cout << "Node Id: "<<this->node_id_<<" added to cluster with id: " << uuid << std::endl;
+        this->start_node_server();
+    }
+    else{
+        std::cout<<"Failed to add Node to cluster"<<std::endl;
+    }
+}
+
 
 void CacheNode::start_node_server() {
-    int server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    int server_socket;
+    int opt = 1;
     sockaddr_in server_addr{};
+    if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        throw std::runtime_error("Socket creation failed.");
+    }
+
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
+        close(server_socket);
+        throw std::runtime_error("Failed to set socket options.");
+    }
+        
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(PORT);
+    server_addr.sin_port = htons(this->port_);
 
-    bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr));
-    listen(server_socket, 3);
+    if (bind(server_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        close(server_socket);
+        throw std::runtime_error("Failed to bind socket.");
+    }
 
-    std::cout << "Server is running on port " << PORT << std::endl;
+    if (listen(server_socket, 3) < 0) {
+        close(server_socket);
+        throw std::runtime_error("Listen failed.");
+    }
+
+    std::cout << "Cache Node Server is running on  "<<this->ip_<<":"<< this->port_ << std::endl;
     
     if(strategy_==EvictionStrategy::LRU){
         // Start the LRU tracking and updating thread

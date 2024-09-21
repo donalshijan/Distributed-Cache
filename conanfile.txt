@@ -2,6 +2,7 @@
 # List your dependencies here
 fmt/8.0.1
 boost/1.85.0
+gtest/1.13.0
 
 [generators]
 CMakeToolchain
@@ -12,3 +13,4 @@ cmake_layout
 
 [options]
 # Specify any package options here
+# gtest/*:build_tests=False

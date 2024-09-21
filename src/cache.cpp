@@ -27,27 +27,31 @@ size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* use
     userp->append((char*)contents, totalSize);
     return totalSize;
 }
-std::string Cache::getPublicIp() {
-    CURL* curl;
-    CURLcode res;
-    std::string readBuffer;
+// std::string Cache::getPublicIp() {
+//     CURL* curl;
+//     CURLcode res;
+//     std::string readBuffer;
 
-    curl = curl_easy_init();
-    if(curl) {
-        // Use an external service to get the public IP
-        curl_easy_setopt(curl, CURLOPT_URL, "https://ifconfig.me");
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+//     curl = curl_easy_init();
+//     if(curl) {
+//         // Use an external service to get the public IP
+//         curl_easy_setopt(curl, CURLOPT_URL, "https://ifconfig.me");
+//         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+//         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
 
-        res = curl_easy_perform(curl);
-        if(res != CURLE_OK) {
-            std::cerr << "Failed to fetch public IP: " << curl_easy_strerror(res) << std::endl;
-        }
-        curl_easy_cleanup(curl);
-    }
+//         res = curl_easy_perform(curl);
+//         if(res != CURLE_OK) {
+//             std::cerr << "Failed to fetch public IP: " << curl_easy_strerror(res) << std::endl;
+//         }
+//         curl_easy_cleanup(curl);
+//     }
 
-    // Return the public IP address as a string
-    return readBuffer;
+//     // Return the public IP address as a string
+//     return readBuffer;
+// }
+
+std::string Cache::getClusterId() const {
+    return this->cluster_id_;
 }
 
         // Helper function to send data over TCP/IP
@@ -70,7 +74,31 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
             throw std::runtime_error("Connection failed.");
         }
 
-        send(sockfd, request.c_str(), request.size(), 0);
+        // send(sockfd, request.c_str(), request.size(), 0);
+
+        ssize_t total_sent = 0;
+        ssize_t bytes_to_send = request.size();
+        const char* data = request.c_str();
+
+        while (total_sent < bytes_to_send) {
+            ssize_t sent = send(sockfd, data + total_sent, bytes_to_send - total_sent, 0);
+            
+            if (sent < 0) {
+                if (errno == EINTR) {
+                    continue;  // Interrupted by a signal, retry
+                }
+                else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    // Socket temporarily unavailable, wait and retry
+                    usleep(1000);  // sleep briefly and retry
+                    continue;
+                }
+                else {
+                    // Some other error occurred
+                    throw std::runtime_error("Send failed");
+                }
+            }
+            total_sent += sent;
+        }
         // Receive the response
         char buffer[1024] = {0};
         int bytes_received = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
@@ -87,6 +115,7 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
         //after migration completes
         nodes_.push_back(node_connection_details);
     }
+
     void Cache::removeNode(const std::string& node_id) {
 
         // Find the node with the matching node_id
@@ -157,9 +186,18 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
                     std::cerr << "Warning: Target node with ID " << target_node_id << " not found in nodes list." << std::endl;
                 }
             }
-
             // Send the MIGRATE message to the node with node_id
-            sendToNode(it->ip, it->port, migrate_message.str());
+            try {
+                // Call the sendToNode method and store the return message.
+                std::string response = sendToNode(it->ip, it->port, migrate_message.str());
+
+                // Process the response if no exception was thrown.
+                std::cout << "Migrate Message sent successfully. Response: " << response << std::endl;
+
+            } catch (const std::exception& e) {
+                // Handle the error if an exception is thrown.
+                std::cerr << "Failed to send Migrate message to node: " << e.what() << std::endl;
+            }
         } else {
             std::cerr << "Error: Node with ID " << node_id << " not found in nodes list." << std::endl;
         }
@@ -173,7 +211,13 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
 
         // Find the node that holds the key
         for (const auto& node : nodes_) {
-                std::string response = sendToNode(node.ip, node.port, request);
+                std::string response; 
+                try{
+                    response=sendToNode(node.ip, node.port, request);
+                }catch (const std::runtime_error& e) {
+                    std::cerr << "Error: " << e.what() << std::endl;
+                    return std::string("Error: ") + e.what();
+                }
                 if (!response.empty() && response[0] == '$') { // Assuming a valid response starts with '$'
                     std::cout << "Response from node " << node.ip << ":" << node.port << " - " << response << std::endl;
                     return response;
@@ -198,7 +242,13 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
             if (node.node_id != node_id_being_deleted_) {
                 // Valid node, proceed with sending request
                 std::string response;
-                response=sendToNode(node.ip, node.port, request);
+                try{
+                    response=sendToNode(node.ip, node.port, request);
+                }catch (const std::runtime_error& e) {
+                    std::cerr << "Error: " << e.what() << std::endl;
+                    return std::string("Error: ") + e.what();
+                }
+                
                 next_node_ = (next_node_ + 1) % num_nodes;
                 return response; 
             }
@@ -285,8 +335,8 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
         close(server_fd);
         throw std::runtime_error("Listen failed.");
     }
-
-    std::cout << "Cache server started on " << ip_ << ":" << port_ << std::endl;
+    std::cout<<"Cluster Manager is Active for Cluster ID:"<<this->cluster_id_<<std::endl;
+    std::cout << "Cache server started and listening on " << ip_ << ":" << port_ << std::endl;
     while (true) {
         // Accept incoming connections
         if ((new_socket = accept(server_fd, (struct sockaddr*)&address, (socklen_t*)&addrlen)) < 0) {
@@ -325,14 +375,76 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
             size_t value_start = request.find("\r\n", key_start) + 2;
             std::string value = request.substr(value_start, request.find("\r\n", value_start) - value_start);
 
-            routeSetRequest(request);
-            response = "+OK\r\n";  // Redis protocol response for successful SET
-        } else {
+            std::string result = routeSetRequest(request);
+            if (result == "Failed:No nodes available to route request.") {
+                response = "-ERR No nodes available to route request.\r\n";
+            } else if (result == "Failed:All nodes are currently being deleted or no nodes available.") {
+                response = "-ERR All nodes are currently being deleted or no nodes available.\r\n";
+            } else {
+                // If it's not a failure, respond with OK
+                response = "+OK\r\n";
+            }
+        } 
+        else if (request.find("ADD") == 0) {
+            // Handle the "ADD" case to add a new node to the cluster
+
+            // Move past "ADD\r\n"
+            size_t pos = 4;
+            
+            // Extract the IP address
+            size_t ip_length_start = request.find("$", pos) + 1;
+            size_t ip_length_end = request.find("\r\n", ip_length_start);
+            int ip_length = std::stoi(request.substr(ip_length_start, ip_length_end - ip_length_start));
+
+            pos = ip_length_end + 2; // Move past "\r\n"
+            std::string node_ip = request.substr(pos, ip_length);
+
+            pos += ip_length + 2; // Move past IP and "\r\n"
+
+            // Extract the port
+            size_t port_length_start = request.find("$", pos) + 1;
+            size_t port_length_end = request.find("\r\n", port_length_start);
+            int port_length = std::stoi(request.substr(port_length_start, port_length_end - port_length_start));
+
+            pos = port_length_end + 2; // Move past "\r\n"
+            int node_port = std::stoi(request.substr(pos, port_length));
+            boost::uuids::uuid uuid = boost::uuids::random_generator()();
+            std::string node_id = boost::uuids::to_string(uuid);
+            NodeConnectionDetails node{node_id, node_ip, node_port};
+            // Call the addNode method with the extracted IP and port
+            addNode(node);
+
+            response = "+OK Node Added\r\n";  // Response indicating the node was successfully added
+            response += this->cluster_id_;
+        }
+        else {
             response = "-ERROR Unknown command\r\n";
         }
 
         // Send the response back to the client
-        send(new_socket, response.c_str(), response.size(), 0);
+        ssize_t total_sent = 0;
+        ssize_t bytes_to_send = response.size();
+        const char* data = response.c_str();
+
+        while (total_sent < bytes_to_send) {
+            ssize_t sent = send(new_socket, data + total_sent, bytes_to_send - total_sent, 0);
+            
+            if (sent < 0) {
+                if (errno == EINTR) {
+                    continue;  // Interrupted by a signal, retry
+                }
+                else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    // Socket temporarily unavailable, wait and retry
+                    usleep(1000);  // sleep briefly and retry
+                    continue;
+                }
+                else {
+                    // Some other error occurred
+                    throw std::runtime_error("Send failed");
+                }
+            }
+            total_sent += sent;
+        }
         close(new_socket); // Close connection after handling
     }
 

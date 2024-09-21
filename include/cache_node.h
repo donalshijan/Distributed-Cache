@@ -16,6 +16,12 @@
 #include <boost/uuid/uuid_io.hpp>
 #include <future>
 
+#define DEFAULT_CACHE_NODE_PORT 8069
+
+#define DEFAULT_CACHE_PORT 7069
+
+#define DEFAULT_IP "127.0.0.1" // Localhost as default IP
+
 struct NodeConnectionDetails {
     std::string node_id;
     std::string ip;
@@ -24,7 +30,7 @@ struct NodeConnectionDetails {
 
 class Cache {
 public:
-    Cache(const std::string& ip, const int& port);
+    Cache(const std::string& ip=DEFAULT_IP, const int& port=DEFAULT_CACHE_PORT);
 
     void addNode(const NodeConnectionDetails& node_connection_details);
     void removeNode(const std::string& node_id);
@@ -65,7 +71,7 @@ struct CacheClusterManagerConnectionDetail {
 
 class CacheNode {
 public:
-    CacheNode(size_t max_memory, std::chrono::seconds ttl,EvictionStrategy strategy,int port = 8069);
+    CacheNode(size_t max_memory, std::chrono::seconds ttl,EvictionStrategy strategy,std::string ip=DEFAULT_IP,int port = DEFAULT_CACHE_NODE_PORT);
     // Set a key-value pair
     std::string set(const std::string& key, const std::string& value);
 
@@ -88,6 +94,7 @@ private:
     };
     std::string node_id_;
     int port_;
+    std::string ip_;
     // Internal data storage
     std::unordered_map<std::string, std::pair<std::string, std::chrono::steady_clock::time_point>> store_;
     // For LFU
@@ -113,6 +120,7 @@ private:
     void remove_expired_periodically();
     void lazyDeleteStaleEntry();
     std::string sendToNode(const std::string& ip, int port, const std::string& request);
+    void addNodeToCluster(const std::string& cluster_manager_ip, int cluster_manager_port);
 };
 
 #endif // CACHE_NODE_H
