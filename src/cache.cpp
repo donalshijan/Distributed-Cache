@@ -243,6 +243,7 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
                 // Valid node, proceed with sending request
                 std::string response;
                 try{
+                    std::cout<<"nodeip:"<<node.ip<<std::endl<<"nodeport:"<<node.port<<std::endl;
                     response=sendToNode(node.ip, node.port, request);
                 }catch (const std::runtime_error& e) {
                     std::cerr << "Error: " << e.what() << std::endl;
@@ -315,9 +316,13 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
     }
 
     // Allow the port to be reused
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+    close(server_fd);
+    throw std::runtime_error("Failed to set SO_REUSEADDR.");
+    }
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt))) {
         close(server_fd);
-        throw std::runtime_error("Failed to set socket options.");
+        throw std::runtime_error("Failed to set SO_REUSEPORT.");
     }
 
     // Bind the socket to the IP and port
@@ -355,41 +360,49 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
 
         std::string request(buffer, valread);
         std::string response;
+        // std::cout<<request;
+        size_t pos = 0;
+        pos = request.find("\r\n");
 
+        if (pos != std::string::npos) {
+            pos += 6; // Move past "\r\n$_\r\n"
+        }
         // Process the request (simple GET and SET handling)
-        if (request.find("GET") == 0) {
+        if (request.substr(pos, 3) == "GET") {
             // Extract key from request
-            size_t key_start = request.find("\r\n", 4) + 2;
-            std::string key = request.substr(key_start, request.find("\r\n", key_start) - key_start);
+            // size_t key_start = request.find("\r\n", 4) + 2;
+            // std::string key = request.substr(key_start, request.find("\r\n", key_start) - key_start);
+            
             try {
                 response = routeGetRequest(request);
             } catch (const std::runtime_error& e) {
                 response = std::string("Error: ") + e.what();
             }
 
-        } else if (request.find("SET") == 0) {
+        } else if (request.substr(pos, 3) == "SET") {
             // Extract key and value from request
-            size_t key_start = request.find("\r\n", 4) + 2;
-            std::string key = request.substr(key_start, request.find("\r\n", key_start) - key_start);
+            // size_t key_start = request.find("\r\n", 4) + 2;
+            // std::string key = request.substr(key_start, request.find("\r\n", key_start) - key_start);
 
-            size_t value_start = request.find("\r\n", key_start) + 2;
-            std::string value = request.substr(value_start, request.find("\r\n", value_start) - value_start);
+            // size_t value_start = request.find("\r\n", key_start) + 2;
+            // std::string value = request.substr(value_start, request.find("\r\n", value_start) - value_start);
 
             std::string result = routeSetRequest(request);
             if (result == "Failed:No nodes available to route request.") {
                 response = "-ERR No nodes available to route request.\r\n";
             } else if (result == "Failed:All nodes are currently being deleted or no nodes available.") {
                 response = "-ERR All nodes are currently being deleted or no nodes available.\r\n";
-            } else {
+            }
+            else {
                 // If it's not a failure, respond with OK
                 response = "+OK\r\n";
             }
         } 
-        else if (request.find("ADD") == 0) {
+        else if (request.substr(pos, 3) == "ADD") {
             // Handle the "ADD" case to add a new node to the cluster
 
             // Move past "ADD\r\n"
-            size_t pos = 4;
+            pos += 5;
             
             // Extract the IP address
             size_t ip_length_start = request.find("$", pos) + 1;

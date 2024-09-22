@@ -532,6 +532,7 @@ void CacheNode::addNodeToCluster(const std::string& cluster_manager_ip, int clus
         this->start_node_server();
     }
     else{
+        std::cout<<response;
         std::cout<<"Failed to add Node to cluster"<<std::endl;
     }
 }
@@ -545,11 +546,16 @@ void CacheNode::start_node_server() {
         throw std::runtime_error("Socket creation failed.");
     }
 
-    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
         close(server_socket);
-        throw std::runtime_error("Failed to set socket options.");
+        throw std::runtime_error("Failed to set SO_REUSEADDR.");
     }
-        
+
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt))) {
+        close(server_socket);
+        throw std::runtime_error("Failed to set SO_REUSEPORT.");
+    } 
+
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(this->port_);
