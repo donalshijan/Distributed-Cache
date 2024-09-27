@@ -6,13 +6,14 @@
 #include <unistd.h>
 #include <future>
 #include <arpa/inet.h>
+#include <fcntl.h>
 
 
 
 CacheNode::CacheNode(size_t max_memory,std::chrono::seconds ttl, EvictionStrategy strategy,std::string ip,int port) : max_memory_(max_memory), used_memory_(0), ttl_(ttl), strategy_(strategy),ip_(ip),port_(port) {
     boost::uuids::uuid uuid = boost::uuids::random_generator()();
     node_id_ = boost::uuids::to_string(uuid);
-    std::cout << "Cache Node created with node id : "<<node_id_<< std::endl;
+    std::cout << "[CacheNode] Cache Node created with node id : "<<node_id_<< std::endl;
 }
 
 std::string CacheNode::set(const std::string& key, const std::string& value) {
@@ -73,7 +74,7 @@ std::string CacheNode::set(const std::string& key, const std::string& value) {
             }
             return "Success: Key-value pair inserted.";
         } catch (const std::bad_alloc&) {
-            std::cerr << "Memory allocation failed." << std::endl;
+            std::cerr << "[CacheNode]  Memory allocation failed." << std::endl;
             return "Memory allocation failed.";
         }
     }
@@ -164,7 +165,7 @@ void CacheNode::evict() {
     } else if (strategy_ == LFU) {
         evictLFU();
     } else if (strategy_ == NoEviction) {
-        std::cerr << "No eviction strategy selected." << std::endl;
+        std::cerr << "[CacheNode]  No eviction strategy selected." << std::endl;
     }
 }
 
@@ -193,7 +194,7 @@ void CacheNode::evictLFU() {
             remove(key);
             frequency_.erase(key);
             min_heap_.pop();  // Remove the key from the heap
-            std::cout << "Evicted key: " << key << std::endl;
+            std::cout << "[CacheNode] Evicted key: " << key << std::endl;
             return;
         } else {
             // The top of the heap is stale (old frequency), discard it
@@ -352,11 +353,11 @@ std::string CacheNode::processRequest(const std::string& request) {
                 std::string response = sendToNode(target_node.first, target_node.second, set_message.str());
 
                 // Process the response if no exception was thrown.
-                std::cout << "Set Message sent successfully. Response: " << response << std::endl;
+                std::cout << "[CacheNode] Set Message sent successfully. Response: " << response << std::endl;
 
             } catch (const std::exception& e) {
                 // Handle the error if an exception is thrown.
-                std::cerr << "Failed to send set message to node: " << e.what() << std::endl;
+                std::cerr << "[CacheNode]  Failed to send set message to node: " << e.what() << std::endl;
             }
             // Move to the next target node (round-robin)
             target_index = (target_index + 1) % target_nodes.size();
@@ -379,6 +380,7 @@ std::string CacheNode::processRequest(const std::string& request) {
         pos += key_length + 2; // Move past key and "\r\n"
         std::string value = get(key);
         // Check if the value is empty
+        std::cout<<"\n[CacheNode] the value:"<<value<<std::endl;
         if (value.empty()) {
             // Return Redis-like nil response
             return "$-1\r\n";
@@ -429,7 +431,7 @@ return "-ERR unknown command\r\n";
 }
 
 void CacheNode::trackAndUpdateLRU() {
-    while (true) {
+    while (!this->stopServer.load()) {
         std::this_thread::sleep_for(std::chrono::seconds(10)); // Adjust the interval as needed
 
         std::lock_guard<std::mutex> lock(mutex_);
@@ -458,7 +460,7 @@ void CacheNode::trackAndUpdateLRU() {
 }
 
 void CacheNode::remove_expired_periodically() {
-    while (true) {
+    while (!this->stopServer.load()) {
         std::this_thread::sleep_for(std::chrono::seconds(ttl_+std::chrono::seconds(1))); // Adjust the interval as needed
 
         std::lock_guard<std::mutex> lock(mutex_);
@@ -467,7 +469,7 @@ void CacheNode::remove_expired_periodically() {
 }
 
 void CacheNode::lazyDeleteStaleEntry() {
-    while (true) {
+    while (!this->stopServer.load()) {
         std::this_thread::sleep_for(std::chrono::seconds(1)); // Adjust the sleep interval as needed
 
         std::lock_guard<std::mutex> lock(mutex_); // Lock the data structures
@@ -519,7 +521,7 @@ void CacheNode::addNodeToCluster(const std::string& cluster_manager_ip, int clus
         response=sendToNode(cluster_manager_ip, cluster_manager_port, message.str());
     }catch (const std::runtime_error& e) {
     // Log the error and return the original error message
-        std::cerr << "Error: " << e.what() << std::endl;
+        std::cerr << "[CacheNode]  Error: " << e.what() << std::endl;
     }
     
     std::string expected_prefix = "+OK Node Added\r\n";
@@ -528,17 +530,26 @@ void CacheNode::addNodeToCluster(const std::string& cluster_manager_ip, int clus
         std::string uuid = response.substr(expected_prefix.size());
 
         // Output the message with the UUID
-        std::cout << "Node Id: "<<this->node_id_<<" added to cluster with id: " << uuid << std::endl;
+        std::cout << "[CacheNode] Node Id: "<<this->node_id_<<" added to cluster with id: " << uuid << std::endl;
         this->start_node_server();
     }
     else{
         std::cout<<response;
-        std::cout<<"Failed to add Node to cluster"<<std::endl;
+        std::cout<<"[CacheNode] Failed to add Node to cluster"<<std::endl;
     }
 }
 
+void CacheNode::shutDown_node_server(){
+        this->stopServer.store(true);
+    }
+int setNonBlocking(int socket) {
+    int flags = fcntl(socket, F_GETFL, 0);
+    if (flags == -1) return -1;
+    return fcntl(socket, F_SETFL, flags | O_NONBLOCK);
+}
 
 void CacheNode::start_node_server() {
+    this->stopServer.store(false);
     int server_socket;
     int opt = 1;
     sockaddr_in server_addr{};
@@ -570,28 +581,47 @@ void CacheNode::start_node_server() {
         throw std::runtime_error("Listen failed.");
     }
 
-    std::cout << "Cache Node Server is running on  "<<this->ip_<<":"<< this->port_ << std::endl;
+    std::vector<std::thread> workerThreads;
     
     if(strategy_==EvictionStrategy::LRU){
         // Start the LRU tracking and updating thread
         std::thread lru_thread(&CacheNode::trackAndUpdateLRU, this);
-        lru_thread.detach(); // Detach the thread so it runs independently
+        // Move it into the vector
+        workerThreads.push_back(std::move(lru_thread));
     }
     if (strategy_ == EvictionStrategy::LFU) {
     // Start the LFU lazy deletion thread
     std::thread lfu_thread(&CacheNode::lazyDeleteStaleEntry, this);
-    lfu_thread.detach(); // Detach the thread so it runs independently
-}
+    // Move it into the vector
+    workerThreads.push_back(std::move(lfu_thread));
+    }
     // Start the periodic expiration removal thread
     std::thread expire_thread(&CacheNode::remove_expired_periodically, this);
-    expire_thread.detach(); // Detach the thread so it runs independently
-
-    while (true) {
+    // Move it into the vector
+    workerThreads.push_back(std::move(expire_thread));  
+    
+    if (setNonBlocking(server_socket) == -1) {
+        std::cerr << "[CacheNode]  Failed to set socket to non-blocking mode." << std::endl;
+        close(server_socket); // Clean up the socket if the operation failed
+    }
+    std::cout << "[CacheNode] Cache Node Server is running on  "<<this->ip_<<":"<< this->port_ << std::endl;
+    while (!this->stopServer.load()) {
         int client_socket = accept(server_socket, nullptr, nullptr);
         if (client_socket >= 0) {
             handle_client(client_socket);
+        } else if (errno != EWOULDBLOCK && errno != EAGAIN) {
+            // Handle other errors
+            std::cerr << "[CacheNode]  Error on accept: " << strerror(errno) << std::endl;
         }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));  // Add small sleep to avoid busy loop
     }
 
     close(server_socket);
+    // Join all worker threads
+    for (auto& t : workerThreads) {
+        if (t.joinable()) {
+            t.join(); // Wait for the thread to finish
+        }
+    }
+    std::cout<<"[CacheNode] Cache Node Server Shutting down..."<<std::endl;
 }

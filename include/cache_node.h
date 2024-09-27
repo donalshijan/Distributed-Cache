@@ -15,6 +15,7 @@
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <future>
+#include <atomic>
 
 #define DEFAULT_CACHE_NODE_PORT 8069
 
@@ -27,6 +28,8 @@ struct NodeConnectionDetails {
     std::string ip;
     int port;
 };
+
+
 
 class Cache {
 public:
@@ -41,7 +44,9 @@ public:
     std::string routeSetRequest(const std::string& request);
     std::string get(const std::string& key);
     std::string set(const std::string& key, const std::string& value);
+    
     void startCacheServer();
+    void shutDownCacheServer();
     std::string getPublicIp();
 
 private:
@@ -53,9 +58,10 @@ private:
     std::string ip_;
     int port_;
     std::string node_id_being_deleted_;
-
+    std::atomic<bool> stopServer;
     // Helper function to send data over TCP/IP
     std::string sendToNode(const std::string& ip, int port, const std::string& request);
+    void handle_client(int new_socket);
 };
 
 enum EvictionStrategy {
@@ -84,6 +90,7 @@ public:
     void handle_client(int client_socket);
     std::string processRequest(const std::string& request);
     void start_node_server();
+    void shutDown_node_server();
     std::future<void> remove_future_;
 
 private:
@@ -92,6 +99,7 @@ private:
             return a.first > b.first; // Min-heap: smaller frequency has higher priority
         }
     };
+    std::atomic<bool> stopServer;
     std::string node_id_;
     int port_;
     std::string ip_;

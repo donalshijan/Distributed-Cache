@@ -20,7 +20,6 @@ Cache::Cache(const std::string& ip, const int& port) : ip_(ip), port_(port) {
         boost::uuids::uuid uuid = boost::uuids::random_generator()();
         cluster_id_ = boost::uuids::to_string(uuid);
     }
-
 // Helper function to write the response data from the CURL call
 size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp) {
     size_t totalSize = size * nmemb;
@@ -183,7 +182,7 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
 
                     migrate_message << "$" << target_info_str.size() << "\r\n" << target_info_str << "\r\n";
                 } else {
-                    std::cerr << "Warning: Target node with ID " << target_node_id << " not found in nodes list." << std::endl;
+                    std::cerr << "[Cache] Warning: Target node with ID " << target_node_id << " not found in nodes list." << std::endl;
                 }
             }
             // Send the MIGRATE message to the node with node_id
@@ -192,14 +191,14 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
                 std::string response = sendToNode(it->ip, it->port, migrate_message.str());
 
                 // Process the response if no exception was thrown.
-                std::cout << "Migrate Message sent successfully. Response: " << response << std::endl;
+                std::cout << "[Cache] Migrate Message sent successfully. Response: " << response << std::endl;
 
             } catch (const std::exception& e) {
                 // Handle the error if an exception is thrown.
-                std::cerr << "Failed to send Migrate message to node: " << e.what() << std::endl;
+                std::cerr << "[Cache] Failed to send Migrate message to node: " << e.what() << std::endl;
             }
         } else {
-            std::cerr << "Error: Node with ID " << node_id << " not found in nodes list." << std::endl;
+            std::cerr << "[Cache] Error: Node with ID " << node_id << " not found in nodes list." << std::endl;
         }
 }
 
@@ -215,12 +214,14 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
                 try{
                     response=sendToNode(node.ip, node.port, request);
                 }catch (const std::runtime_error& e) {
-                    std::cerr << "Error: " << e.what() << std::endl;
+                    std::cerr << "[Cache] Error: " << e.what() << std::endl;
                     return std::string("Error: ") + e.what();
                 }
                 if (!response.empty() && response[0] == '$') { // Assuming a valid response starts with '$'
-                    std::cout << "Response from node " << node.ip << ":" << node.port << " - " << response << std::endl;
-                    return response;
+                    std::cout << "[Cache] Response from node " << node.ip << ":" << node.port << " - " << response << std::endl;
+                    if(response!="$-1\r\n"){
+                        return response;
+                    }   
                 }
         }
 
@@ -231,7 +232,7 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
         std::lock_guard<std::mutex> lock(mutex_);
         size_t num_nodes = nodes_.size();
         if (num_nodes == 0) {
-            std::cerr << "No nodes available to route request." << std::endl;
+            std::cerr << "[Cache] No nodes available to route request." << std::endl;
             return "Failed:No nodes available to route request.";
         }
 
@@ -243,10 +244,10 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
                 // Valid node, proceed with sending request
                 std::string response;
                 try{
-                    std::cout<<"nodeip:"<<node.ip<<std::endl<<"nodeport:"<<node.port<<std::endl;
+                    std::cout<<"[Cache] nodeip:"<<node.ip<<std::endl<<"nodeport:"<<node.port<<std::endl;
                     response=sendToNode(node.ip, node.port, request);
                 }catch (const std::runtime_error& e) {
-                    std::cerr << "Error: " << e.what() << std::endl;
+                    std::cerr << "[Cache] Error: " << e.what() << std::endl;
                     return std::string("Error: ") + e.what();
                 }
                 
@@ -257,17 +258,14 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
             next_node_ = (next_node_ + 1) % num_nodes;
         } while (next_node_ != start_node);
 
-        std::cerr << "All nodes are currently being deleted or no nodes available." << std::endl;
+        std::cerr << "[Cache] All nodes are currently being deleted or no nodes available." << std::endl;
         return "Failed:All nodes are currently being deleted or no nodes available.";
     }
 
-    std::string Cache::get(const std::string& key){
-
-        std::lock_guard<std::mutex> lock(mutex_);
-        
+    std::string Cache::get(const std::string& key){        
         // Ensure the key is not empty
         if (key.empty()) {
-            std::cerr << "Key is empty. Cannot route request." << std::endl;
+            std::cerr << "[Cache] Key is empty. Cannot route request." << std::endl;
             throw std::runtime_error("Key is Empty");
         }
 
@@ -282,17 +280,15 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
         
         } catch (const std::runtime_error& e) {
         // Log the error and return the original error message
-            std::cerr << "Error: " << e.what() << std::endl;
+            std::cerr << "[Cache] Error: " << e.what() << std::endl;
             return std::string("Error: ") + e.what();
         }
         return response;
     }
     std::string Cache::set(const std::string& key, const std::string& value) {
-        std::lock_guard<std::mutex> lock(mutex_);
-
         // Ensure the key and value are not empty
         if (key.empty() || value.empty()) {
-            std::cerr << "Key or value is empty. Cannot route request." << std::endl;
+            std::cerr << "[Cache] Key or value is empty. Cannot route request." << std::endl;
             return "Failed:Key or value is empty. Cannot route request.";
         }
 
@@ -303,8 +299,20 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
 
         return routeSetRequest(request);
     }
+
+    int setNonBlockingSocket(int socket) {
+    int flags = fcntl(socket, F_GETFL, 0);
+    if (flags == -1) return -1;
+    return fcntl(socket, F_SETFL, flags | O_NONBLOCK);
+}
+
+    void Cache::shutDownCacheServer(){
+        this->stopServer.store(true);
+    }
     
     void Cache::startCacheServer() {
+    // std::atomic<bool> stopServer(false);
+    this->stopServer.store(false);
     int server_fd, new_socket;
     struct sockaddr_in address;
     int opt = 1;
@@ -340,22 +348,38 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
         close(server_fd);
         throw std::runtime_error("Listen failed.");
     }
-    std::cout<<"Cluster Manager is Active for Cluster ID:"<<this->cluster_id_<<std::endl;
-    std::cout << "Cache server started and listening on " << ip_ << ":" << port_ << std::endl;
-    while (true) {
+    if (setNonBlockingSocket(server_fd) == -1) {
+        std::cerr << "[Cache] Failed to set socket to non-blocking mode." << std::endl;
+        close(server_fd); // Clean up the socket if the operation failed
+    }
+    std::cout<<"[Cache] Cluster Manager is Active for Cluster ID:"<<this->cluster_id_<<std::endl;
+    std::cout << "[Cache] Cache server started and listening on " << ip_ << ":" << port_ << std::endl;
+    while (!this->stopServer.load()) {
         // Accept incoming connections
-        if ((new_socket = accept(server_fd, (struct sockaddr*)&address, (socklen_t*)&addrlen)) < 0) {
-            std::cerr << "Failed to accept connection." << std::endl;
-            continue;
+        if ((new_socket = accept(server_fd, (struct sockaddr*)&address, (socklen_t*)&addrlen)) >= 0) {
+            handle_client(new_socket);
         }
+        else if (errno != EWOULDBLOCK && errno != EAGAIN) {
+            // Handle other errors
+            std::cerr << "[Cache] Error on accept: " << strerror(errno) << std::endl;
+        }
+        else{
+            // std::cerr << "Failed to accept connection." << std::endl;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));  // Add small sleep to avoid busy loop
+    }
+    close(server_fd);  // Close server socket   
+    std::cout<<"[Cache] Cache Server Shutting down..."<<std::endl;
+}
 
-        // Receive the client's request
+void Cache::handle_client(int new_socket){
+    // Receive the client's request
         char buffer[1024] = {0};
         int valread = read(new_socket, buffer, 1024);
         if (valread < 0) {
-            std::cerr << "Failed to read from socket." << std::endl;
+            std::cerr << "[Cache] Failed to read from socket." << std::endl;
             close(new_socket);
-            continue;
+            return;
         }
 
         std::string request(buffer, valread);
@@ -459,7 +483,4 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
             total_sent += sent;
         }
         close(new_socket); // Close connection after handling
-    }
-
-    close(server_fd);  // Close server socket
 }

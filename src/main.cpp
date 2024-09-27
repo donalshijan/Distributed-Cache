@@ -9,13 +9,20 @@
 
 void showUsageMessage(const std::string& command) {
     if (command == "add_new_node_to_existing_cluster") {
-        std::cerr << "Usage: add_new_node_to_existing_cluster --memory_limit=<bytes> "
-                     "--time_till_eviction=<seconds> --eviction_strategy=<NoEviction|LRU|LFU> "
-                     "--cluster_id=<id> --cluster_ip=<ip> --cluster_port=<port> [--ip=<node_ip>] [--port=<node_port>]" << std::endl;
+        std::cerr << "Usage: add_new_node_to_existing_cluster --memory_limit <bytes> "
+                     "--time_till_eviction <seconds> --eviction_strategy <NoEviction|LRU|LFU> "
+                     "--cluster_id <id> --cluster_ip <ip> --cluster_port <port> [--ip <node_ip>] [--port <node_port>]" << std::endl;
     }
     else if (command == "create_cache_cluster") {
-        std::cerr << "Usage: create_cache_cluster [--ip=<ip>] [--port=<port>]" << std::endl;
-    } else {
+        std::cerr << "Usage: create_cache_cluster [--ip <ip>] [--port <port>]" << std::endl;
+    } 
+    else if (command == "GET") {
+        std::cerr << "Usage:  GET <cache_server_ip> <cache_server_port> <key> " << std::endl;
+    }
+    else if (command == "SET") {
+        std::cerr << "Usage:  SET <cache_server_ip> <cache_server_port> <key> <value>" << std::endl;
+    }
+    else {
         std::cerr << "Unknown command: " << command << std::endl;
     }
 }
@@ -155,6 +162,11 @@ int main(int argc, char* argv[]) {
 
     }
     else if(command == "GET"){
+        if (argc != 5) {
+            std::cerr << "Invalid arguments for GET." << std::endl;
+            showUsageMessage("GET");
+            return 1;
+        }
         std::string cache_ip = argv[2];
         int cache_port = std::stoi(argv[3]);
         std::string key = argv[4];
@@ -166,7 +178,7 @@ int main(int argc, char* argv[]) {
             // Parse and validate the response
             if (response.empty()) {
                 throw std::runtime_error("Empty response from cache.");
-            } else if (response == "$-1\r\n") {
+            } else if (response == "Error: Key does not belong to any node in the routing table.") {
                 throw std::runtime_error("Key not found.");
             } else if (response[0] == '$') {
                 // Extract value from response
@@ -188,6 +200,11 @@ int main(int argc, char* argv[]) {
         
     } 
     else if(command == "SET"){
+        if (argc != 6) {
+            std::cerr << "Invalid arguments for SET." << std::endl;
+            showUsageMessage("SET");
+            return 1;
+        }
         std::string cache_ip = argv[2];
         int cache_port = std::stoi(argv[3]);
         std::string key = argv[4];

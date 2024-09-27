@@ -4,4 +4,4 @@ build/
 *.so
 *.dylib
 *.exe
-README.md
+myenv

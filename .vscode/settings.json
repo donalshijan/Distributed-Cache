@@ -51,6 +51,8 @@
         "__tree": "cpp",
         "list": "cpp",
         "map": "cpp",
-        "queue": "cpp"
+        "queue": "cpp",
+        "deque": "cpp",
+        "__memory": "cpp"
     }
 }

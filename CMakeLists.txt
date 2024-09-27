@@ -7,30 +7,42 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 
 # Find Boost
 find_package(Boost REQUIRED)
-# Include Boost headers
 include_directories(${Boost_INCLUDE_DIRS})
 
-# Add GoogleTest
-# find_package(GTest REQUIRED)
-
-# Include Conan dependencies
-# include(${CMAKE_BINARY_DIR}/generators/conan_toolchain.cmake)
-
-# Adjust this path to the actual location of your conan_toolchain.cmake
-set(CMAKE_TOOLCHAIN_FILE "/Users/donalshijan/Workspace/PersonalProjects/Distributed_Cache/build/Release/generators/conan_toolchain.cmake")
+# Include GTest using FetchContent
+include(FetchContent)
+FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/release-1.12.1.zip
+)
+FetchContent_MakeAvailable(googletest)
 
 file(GLOB SOURCES "src/*.cpp")
 
+# Add main executable
 add_executable(distributed_cache ${SOURCES})
 
-# Add Google Test for unit testing
-# enable_testing()
+# Create library for cache implementation
+add_library(CacheLib src/cache.cpp src/cache_node.cpp)
 
-# # Create the test executable
-# add_executable(run_tests tests/test_cache.cpp src/cache.cpp src/cache_node.cpp)
+# Test sources
+file(GLOB TEST_SOURCES "tests/*.cpp")
 
-# # Link Google Test and other required libraries
-# target_link_libraries(run_tests ${CONAN_LIBS} GTest::gtest GTest::gtest_main)
+# Add test executable
+add_executable(CacheUnitTests ${TEST_SOURCES})
 
-# Set up the tests
-add_test(NAME CacheTests COMMAND run_tests)
+# Link libraries
+target_link_libraries(CacheUnitTests PRIVATE CacheLib gtest_main)
+
+# Optionally, add a custom target to run tests
+add_custom_target(run_tests
+    COMMAND CacheUnitTests
+    DEPENDS CacheUnitTests
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
+# Enable testing
+enable_testing()
+
+# Add tests to CTest
+add_test(NAME CacheTests COMMAND CacheUnitTests)
