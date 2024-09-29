@@ -281,7 +281,7 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
         } catch (const std::runtime_error& e) {
         // Log the error and return the original error message
             std::cerr << "[Cache] Error: " << e.what() << std::endl;
-            return std::string("Error: ") + e.what();
+            return std::string("-ERR: ") + e.what();
         }
         return response;
     }
@@ -400,7 +400,7 @@ void Cache::handle_client(int new_socket){
             try {
                 response = routeGetRequest(request);
             } catch (const std::runtime_error& e) {
-                response = std::string("Error: ") + e.what();
+                response = std::string("-ERR: ") + e.what();
             }
 
         } else if (request.substr(pos, 3) == "SET") {

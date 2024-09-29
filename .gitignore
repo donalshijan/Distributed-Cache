@@ -5,3 +5,7 @@ build/
 *.dylib
 *.exe
 myenv
+*.log
+results.txt
+__pycache__
+Testing

@@ -178,7 +178,7 @@ int main(int argc, char* argv[]) {
             // Parse and validate the response
             if (response.empty()) {
                 throw std::runtime_error("Empty response from cache.");
-            } else if (response == "Error: Key does not belong to any node in the routing table.") {
+            } else if (response == "-ERR: Key does not belong to any node in the routing table.") {
                 throw std::runtime_error("Key not found.");
             } else if (response[0] == '$') {
                 // Extract value from response

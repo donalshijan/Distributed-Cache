@@ -1,12 +1,12 @@
 # Project Overview
 
-    Project implements a high performant distributed cache system where data is stored in memory using HashMap(index) data structure with both key and value as string type. Cache implements configuration options for Eviction Strategy(NoEviction,LFU,LRU), Maximum memory limit, time to live.
+Project implements a high performant distributed cache system where data is stored in memory using HashMap(index) data structure with both key and value as string type. Cache implements configuration options for Eviction Strategy(NoEviction,LFU,LRU), Maximum memory limit, time to live.
 
-    It also implements built in clustering support and routing strategy where new nodes can be configured and added to existing cluster seamlessly, without worrying about managing request routing.
+It also implements built in clustering support and routing strategy where new nodes can be configured and added to existing cluster seamlessly, without worrying about managing request routing.
 
-    Also Implements  migration strategy for migrating data from one node in a cluster to other nodes if that node were to be removed.
+Also Implements  migration strategy for migrating data from one node in a cluster to other nodes if that node were to be removed.
 
-    All communications with and within the system uses a custom message protocol implementation similar to redis.
+All communications with and within the system uses a custom message protocol implementation similar to redis.
 
 ##  Architecture
 
@@ -36,10 +36,16 @@ and for Migrate
 
 
 # How to Build
+
     Install cmake
     Install conan
 
-In the project root directlry
+After installing cmake and conan.
+It is highly recommended to use the script mentioned in the Test section below to build and run tests.
+
+But if you don't want to use the script and build manually here are the steps.
+
+In the project root directry
 run the command
 ```
 conan install . --build=missing
@@ -136,7 +142,9 @@ Value: value
 
 
 # Test
+cd into the project directory after cloning the repo.
 
-chmod +x build_and_run_tests.sh
+To build and run tests you can simply run the following script
 
-./build_and_run_tests.sh
+    chmod +x build_and_run_tests.sh
+    ./build_and_run_tests.sh

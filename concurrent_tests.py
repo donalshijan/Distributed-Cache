@@ -87,7 +87,7 @@ def set_keys(ip, port, key_value_pairs,progress_bar):
     for index, (key, value) in enumerate(key_value_pairs.items()):
         message = construct_set_message(key, value)
         response = send_request(message, ip, port)
-        print(f"Set {key}: {response.strip()}")
+        print(f"\nSet {key}: {response.strip()}")
         if "+OK" not in response:
             print(f"Error setting key {key}")
             
@@ -150,7 +150,7 @@ if __name__ == "__main__":
             print(f"Received {valid_responses_count} valid responses out of {len(keys)}. Stopping test.")
             break  # Stop if not all responses are valid
     
-    with open('result.txt', 'a') as result_file:
+    with open('results.txt', 'a') as result_file:
         result_file.write(f"Server was able to handle {valid_responses_count} concurrent requests.\n")
     
     print("\nConcurrent Tests completed.")

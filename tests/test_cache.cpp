@@ -12,7 +12,7 @@ void startCacheServer(Cache &cache) {
 void startNodeServer(CacheNode &node, Cache &cache, std::string &ip, int port) {
     try{node.assignToCluster(cache.getClusterId(), ip, port);}
     catch(const std::runtime_error& e){
-        std::cerr << "Error here: " << e.what() << std::endl;
+        std::cerr << "Error: " << e.what() << std::endl;
     }
 }
 
@@ -78,7 +78,7 @@ TEST(CacheTest, SetAndGet) {
     try{
         std::string response = cache.get("key1");
         std::cout<< response <<std::endl;
-        EXPECT_EQ(response, "Error: Key does not belong to any node in the routing table.") << "TTL expiration failed!";
+        EXPECT_EQ(response, "-ERR: Key does not belong to any node in the routing table.") << "TTL expiration failed!";
     }
     catch (const std::runtime_error& e) {
             std::cerr << "Error: " << e.what() << std::endl;
@@ -112,7 +112,7 @@ TEST(CacheTest, GetNonExistingKey) {
     std::this_thread::sleep_for(std::chrono::seconds(2));
     try{
     std::string response = cache.get("key3");
-    EXPECT_EQ(response, "Error: Key does not belong to any node in the routing table.") << "Expected key not found!";
+    EXPECT_EQ(response, "-ERR: Key does not belong to any node in the routing table.") << "Expected key not found!";
     }
     catch (const std::runtime_error& e) {
             std::cerr << "Error: " << e.what() << std::endl;
