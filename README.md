@@ -82,10 +82,10 @@ This will start the cache server at the default ip and port which are "127.0.0.1
 
 Following is an example of what a successful response log can be like when running the above command in terminal.
 
-```
-Cluster Manager is Active for Cluster ID:f8f4b9f8-db41-449a-9001-b6ae83e6443e
+
+>Cluster Manager is Active for Cluster ID:f8f4b9f8-db41-449a-9001-b6ae83e6443e
 Cache server started and listening on 127.0.0.1:7069
-```
+
 
 The above command can be further extended to pass specific ip and port as command line arguments
 
@@ -101,11 +101,11 @@ If cache server accepts and successfully adds the new node and sends acknowledge
 
 Following is an example of what a successful response log can be like when running the above command in terminal.
 
-```
-Cache Node created with node id : 6ac52e36-723d-4f04-a20c-3e42a2af15bc
+
+>Cache Node created with node id : 6ac52e36-723d-4f04-a20c-3e42a2af15bc
 Node Id: 6ac52e36-723d-4f04-a20c-3e42a2af15bc added to cluster with id: f8f4b9f8-db41-449a-9001-b6ae83e6443e
 Cache Node Server is running on  127.0.0.1:8069
-```
+
 The above command can also be extended with optional command line arguments ip and port to start the cache node server on a specific ip address and port other than default.
 
 ```
@@ -119,9 +119,9 @@ Example usage on how to make a set request
 
 Following is an example of a successful response from running above command.
 
-```
-Server response: +OK
-```
+
+>Server response: +OK
+
 
 
 Example usage on how to make a get request 
@@ -132,12 +132,11 @@ Example usage on how to make a get request
 
 Following is an example of a successful response from running above command.
 
-```
-Server response: $5
-value
 
-Value: value
-```
+<pre>Server response: $5 
+value 
+Value: value </pre>
+
 
 
 
