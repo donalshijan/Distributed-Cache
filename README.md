@@ -133,12 +133,7 @@ Example usage on how to make a get request
 Following is an example of a successful response from running above command.
 
 
-> ```
-> Server response: $5
-> value
-> Value: value
-> ```
-
+>Server response: $5<br>value<br>Value: value
 
 
 # Test
