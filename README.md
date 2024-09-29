@@ -133,10 +133,11 @@ Example usage on how to make a get request
 Following is an example of a successful response from running above command.
 
 
-<pre>Server response: $5 
-value 
-Value: value </pre>
-
+> ```
+> Server response: $5
+> value
+> Value: value
+> ```
 
 
 
