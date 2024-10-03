@@ -73,8 +73,6 @@ pipeline {
         }
 
         always {
-            // Archive test results or artifacts
-            archiveArtifacts artifacts: '**/target/*.log', allowEmptyArchive: true
 
             // Ensure all running processes are killed after the pipeline ends
             sh '''
