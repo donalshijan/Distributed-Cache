@@ -9,3 +9,6 @@ myenv
 results.txt
 __pycache__
 Testing
+distributed-cache-437300-735646e62545.json
+*.tfvars
+*terraform*

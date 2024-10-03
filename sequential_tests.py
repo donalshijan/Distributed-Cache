@@ -79,10 +79,12 @@ def sequential_get_test(ip, port, key_value_pairs, progress_bar):
         average_time = total_time / valid_responses_count
         result_message = f"Average retrieval time for valid responses: {average_time:.6f} seconds"
         print(result_message)
-        with open("results.txt", "a") as logfile:
-            logfile.write(result_message + "\n")
     else:
         print("No valid responses received.")
+        result_message=f"No valid responses received during sequential tests."
+        
+    with open("results.txt", "a") as logfile:
+            logfile.write(result_message + "\n")
 
 if __name__ == "__main__":
     # Create argument parser
