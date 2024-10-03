@@ -8,7 +8,8 @@ pipeline {
                     // Install dependencies on the VM
                     sh '''
                     sudo apt-get update
-                    sudo apt-get install -y git gcc cmake conan
+                    sudo apt-get install -y git gcc cmake python3-pip
+                    sudo pip3 install conan
                     '''
                 }
             }
