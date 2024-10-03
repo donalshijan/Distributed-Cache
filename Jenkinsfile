@@ -12,9 +12,6 @@ pipeline {
                     sudo apt install -y build-essential libssl-dev
                     wget https://github.com/Kitware/CMake/releases/download/v3.30.2/cmake-3.30.2-Linux-x86_64.tar.gz
                     tar -zxvf cmake-3.30.2-Linux-x86_64.tar.gz
-                    cd ~
-                    sudo mv ~/cmake-3.30.2-linux-x86_64 /usr/local/cmake
-                    sudo ln -s /usr/local/cmake/bin/cmake /usr/bin/cmake
                     sudo pip3 install conan
                     '''
                 }
