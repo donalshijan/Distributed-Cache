@@ -49,10 +49,10 @@ pipeline {
         success {
             script {
                 if (currentBuild.currentResult == 'SUCCESS') {
-                    if (currentBuild.stageName == 'Build') {
+                    if (currentBuild.stage == 'Build') {
                         // Notify GitHub that the build succeeded
                         githubNotify context: 'Build', status: 'SUCCESS', description: 'Build succeeded!'
-                    } else if (currentBuild.stageName == 'Run Unit Tests') {
+                    } else if (currentBuild.stage == 'Run Unit Tests') {
                         // Notify GitHub that the tests passed
                         githubNotify context: 'Tests', status: 'SUCCESS', description: 'All tests passed!'
                     }
@@ -62,10 +62,10 @@ pipeline {
 
         failure {
             script {
-                if (currentBuild.stageName == 'Build') {
+                if (currentBuild.stage == 'Build') {
                     // Notify GitHub that the build failed
                     githubNotify context: 'Build', status: 'FAILURE', description: 'Build failed.'
-                } else if (currentBuild.stageName == 'Run Unit Tests') {
+                } else if (currentBuild.stage == 'Run Unit Tests') {
                     // Notify GitHub that the tests failed
                     githubNotify context: 'Tests', status: 'FAILURE', description: 'Tests failed.'
                 }
