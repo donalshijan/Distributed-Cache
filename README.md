@@ -138,8 +138,14 @@ Following is an example of a successful response from running above command.
 
 # Test
 cd into the project directory after cloning the repo.
-
+If you are building the project first time, you might not have a conan profile created so run the following command to create a conan profile
+`conan profile detect`
 To build and run tests you can simply run the following script
 
     chmod +x build_and_run_tests.sh
     ./build_and_run_tests.sh
+
+
+To run the k6 load test
+
+`k6 run -e CACHE_SERVER_IP=127.0.0.1 -e CACHE_SERVER_PORT=8079 load_test.js`

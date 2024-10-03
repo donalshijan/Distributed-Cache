@@ -27,7 +27,7 @@ pipeline {
                     sh '''
                     conan profile detect
                     conan install . --build=missing
-                    cmake --preset conan-release
+                    cmake --preset conan-release --verbose
                     cmake --build --preset conan-release
                     '''
                 }
