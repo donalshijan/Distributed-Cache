@@ -25,7 +25,6 @@ pipeline {
                 script {
                     // Build the project using cmake
                     sh '''
-                    cd Distributed-Cache
                     cmake --preset conan-release
                     cmake --build --preset conan-release
                     '''
@@ -38,7 +37,6 @@ pipeline {
                 script {
                     // Run unit tests and stop if they fail
                     sh '''
-                    cd Distributed-Cache
                     ctest --verbose --test-dir ./build/Release
                     '''
                 }
