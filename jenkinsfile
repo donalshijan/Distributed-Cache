@@ -19,7 +19,7 @@ pipeline {
         }
         stage('Checkout') {
             steps {
-                git branch: 'main', url: 'https://github.com/donalshijan/Distributed-Cache.git'
+                git branch: 'main', url: 'https://github.com/donalshijan/Distributed-Cache'
             }
         }
 
