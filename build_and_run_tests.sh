@@ -70,6 +70,7 @@ fi
 
 # Build the project
 echo "Building the project..."
+conan install . --build=missing
 cmake --preset conan-release
 cmake --build --preset conan-release
 
