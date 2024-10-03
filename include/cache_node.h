@@ -16,6 +16,7 @@
 #include <boost/uuid/uuid_io.hpp>
 #include <future>
 #include <atomic>
+#include <sstream>
 
 #define DEFAULT_CACHE_NODE_PORT 8069
 

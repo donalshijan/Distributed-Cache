@@ -22,6 +22,9 @@ file(GLOB SOURCES "src/*.cpp")
 # Add main executable
 add_executable(distributed_cache ${SOURCES})
 
+# Link pthread
+target_link_libraries(distributed_cache pthread)
+
 # Create library for cache implementation
 add_library(CacheLib src/cache.cpp src/cache_node.cpp)
 
