@@ -48,27 +48,38 @@ pipeline {
     post {
         success {
             script {
-                if (currentBuild.currentResult == 'SUCCESS') {
-                    if (currentBuild.stage == 'Build') {
-                        // Notify GitHub that the build succeeded
-                        githubNotify context: 'Build', status: 'SUCCESS', description: 'Build succeeded!'
-                    } else if (currentBuild.stage == 'Run Unit Tests') {
-                        // Notify GitHub that the tests passed
-                        githubNotify context: 'Tests', status: 'SUCCESS', description: 'All tests passed!'
-                    }
-                }
+                sh """
+                curl -X POST -H "Authorization: token YOUR_GITHUB_TOKEN" \
+                     -d '{"state": "success", "description": "Build and tests completed successfully.", "context": "continuous-integration/jenkins"}' \
+                     "https://api.github.com/repos/YOUR_USERNAME/YOUR_REPO/statuses/${env.GIT_COMMIT}"
+                """
+                // if (currentBuild.currentResult == 'SUCCESS') {
+                //     if (currentBuild.stageName == 'Build') {
+                //         // Notify GitHub that the build succeeded
+                //         githubNotify context: 'Build', status: 'SUCCESS', description: 'Build succeeded!'
+                //     } else if (currentBuild.stageName == 'Run Unit Tests') {
+                //         // Notify GitHub that the tests passed
+                //         githubNotify context: 'Tests', status: 'SUCCESS', description: 'All tests passed!'
+                //     }
+                // }
             }
         }
 
         failure {
             script {
-                if (currentBuild.stage == 'Build') {
-                    // Notify GitHub that the build failed
-                    githubNotify context: 'Build', status: 'FAILURE', description: 'Build failed.'
-                } else if (currentBuild.stage == 'Run Unit Tests') {
-                    // Notify GitHub that the tests failed
-                    githubNotify context: 'Tests', status: 'FAILURE', description: 'Tests failed.'
-                }
+                // Update GitHub status on failure
+                sh """
+                curl -X POST -H "Authorization: token YOUR_GITHUB_TOKEN" \
+                     -d '{"state": "failure", "description": "Build or tests failed.", "context": "continuous-integration/jenkins"}' \
+                     "https://api.github.com/repos/YOUR_USERNAME/YOUR_REPO/statuses/${env.GIT_COMMIT}"
+                """
+                // if (currentBuild.stageName == 'Build') {
+                //     // Notify GitHub that the build failed
+                //     githubNotify context: 'Build', status: 'FAILURE', description: 'Build failed.'
+                // } else if (currentBuild.stageName == 'Run Unit Tests') {
+                //     // Notify GitHub that the tests failed
+                //     githubNotify context: 'Tests', status: 'FAILURE', description: 'Tests failed.'
+                // }
             }
         }
 
