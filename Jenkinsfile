@@ -9,7 +9,6 @@ pipeline {
                     sh '''
                     sudo apt-get update
                     sudo apt-get install -y git gcc python3-pip
-                    sudo apt install -y build-essential libssl-dev
                     sudo pip3 install conan
                     '''
                 }

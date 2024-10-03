@@ -246,7 +246,14 @@ void CacheNode::handle_client(int client_socket) {
 
     response=processRequest(request);
 
-    write(client_socket, response.c_str(), response.length());
+    ssize_t bytes_written = write(client_socket, response.c_str(), response.length());
+    if (bytes_written == -1) {
+        // Handle the error, e.g., log it or throw an exception
+        perror("Error writing to socket");
+    } else if (bytes_written < response.length()) {
+        // Handle partial write if necessary
+        std::cerr << "Warning: Partial write to socket." << std::endl;
+    }
     close(client_socket);
 }
 
