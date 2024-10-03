@@ -26,7 +26,7 @@ pipeline {
                     // Build the project using cmake
                     sh '''
                     conan install . --build=missing
-                    cmake --preset conan-release --verbose
+                    cmake --preset conan-release
                     cmake --build --preset conan-release
                     '''
                 }
