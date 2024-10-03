@@ -10,8 +10,6 @@ pipeline {
                     sudo apt-get update
                     sudo apt-get install -y git gcc python3-pip
                     sudo apt install -y build-essential libssl-dev
-                    wget https://github.com/Kitware/CMake/releases/download/v3.30.2/cmake-3.30.2-Linux-x86_64.tar.gz
-                    tar -zxvf cmake-3.30.2-Linux-x86_64.tar.gz
                     sudo pip3 install conan
                     '''
                 }
