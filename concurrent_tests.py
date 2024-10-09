@@ -4,6 +4,7 @@ import random
 import string
 import argparse
 import asyncio
+import time
 from tqdm.asyncio import tqdm
 from progress_bar import ProgressBar 
 
@@ -66,36 +67,36 @@ async def concurrent_test(ip, port, keys):
         for key in keys:
             task = send_request_async(ip, port, key)
             tasks.append(task)
-
-        # Gather responses with progress tracking
-        for task in asyncio.as_completed(tasks):
-            response = await task
-            progress.update(1)  # Update progress bar after each task completion
-            
-            if response.strip().startswith("$"):  # Check for valid response
-                valid_responses_count += 1
-            elif response == "TIMEOUT":
-                print(f"Request for key timed out.")  # Log the timeout
-            else:
-                print(f"Error response: {response}")  # Log other errors
+        with open("concurrent_test_logs.log", "a") as log_file:
+            # Gather responses with progress tracking
+            for task in asyncio.as_completed(tasks):
+                response = await task
+                progress.update(1)  # Update progress bar after each task completion
+                
+                if response.strip().startswith("$"):  # Check for valid response
+                    valid_responses_count += 1
+                elif response == "TIMEOUT":
+                    log_file.write(f"\nRequest for key timed out.")  # Log the timeout
+                else:
+                    log_file.write(f"\nError response: {response}")  # Log other errors
 
     print(f"Total valid responses: {valid_responses_count} out of {len(keys)}")
     return valid_responses_count
 
 def set_keys(ip, port, key_value_pairs,progress_bar):
     total_pairs = len(key_value_pairs)
-    for index, (key, value) in enumerate(key_value_pairs.items()):
-        message = construct_set_message(key, value)
-        response = send_request(message, ip, port)
-        print(f"\nSet {key}: {response.strip()}")
-        if "+OK" not in response:
-            print(f"Error setting key {key}")
+    with open("concurrent_test_logs.log", "a") as log_file:
+        for index, (key, value) in enumerate(key_value_pairs.items()):
+            message = construct_set_message(key, value)
+            response = send_request(message, ip, port)
+            log_file.write(f"\nSet {key}: {response.strip()}")
+            if "+OK" not in response:
+                log_file.write(f"Error setting key {key}")
+                
+            # Update progress
+            progress_bar.update(index + 1)
             
-        # Update progress
-        progress = (index + 1) / total_pairs * 100
-        print(f"\rProgress: {progress:.2f}% complete", end='')
-        progress_bar.update(index + 1)
-    
+    time.sleep(0.2) 
     progress_bar.stop()  # Stop the progress bar after completion
     print("\nSET requests completed.")
 
@@ -126,9 +127,10 @@ if __name__ == "__main__":
         
         # Start the progress bar thread for SET requests
         progress_thread_set = threading.Thread(target=progress_bar_set.display)
-        progress_thread_set.start()
+        
         
         print("Starting SET requests...")
+        progress_thread_set.start()
         set_keys(cache_server_ip, cache_server_port, key_value_pairs,progress_bar_set)  # Setting keys in cache
         
         

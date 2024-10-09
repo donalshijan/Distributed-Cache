@@ -1,0 +1,693 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Load_Test_For_Distributed_Cache">
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables">
+        <collectionProp name="Arguments.arguments"/>
+      </elementProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+    </TestPlan>
+    <hashTree>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Thread Group">
+        <intProp name="ThreadGroup.num_threads">100</intProp>
+        <intProp name="ThreadGroup.ramp_time">10</intProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">false</boolProp>
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller">
+          <stringProp name="LoopController.loops">1</stringProp>
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="JSR223 Sampler">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="parameters"></stringProp>
+          <stringProp name="filename"></stringProp>
+          <stringProp name="cacheKey">true</stringProp>
+          <stringProp name="script">import java.util.Random
+import java.io.PrintWriter
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+
+import org.apache.jmeter.util.JMeterUtils
+import java.util.concurrent.Executors
+
+
+def constructSetMessage(String key, String value) {
+    return &quot;*3\r\n\\$3\r\nSET\r\n\\$${key.length()}\r\n${key}\r\n\\$${value.length()}\r\n${value}\r\n&quot;
+}
+
+def constructGetMessage(String key) {
+    return &quot;*2\r\n\\$3\r\nGET\r\n\\$${key.length()}\r\n${key}\r\n&quot;
+}
+
+def randomString(int length) {
+    def chars = &apos;abcdefghijklmnopqrstuvwxyz&apos;;
+    def random = new Random()
+    (1..length).collect { chars[random.nextInt(chars.length())] }.join()
+}
+// Function to send a TCP request
+def sendRequest(String message, String ip, int port, int timeout) {
+	
+    Socket socket = null
+    try {
+        socket = new Socket(ip, port)
+        socket.setSoTimeout(timeout * 1000)  // Set timeout in milliseconds
+
+        // Send the request
+        PrintWriter out = new PrintWriter(socket.getOutputStream(), true)
+        out.print(message)
+        out.flush()
+
+        // Read the response
+        BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))
+        def response = in.readLine()
+        return response
+
+    } catch (Exception e) {
+        return &quot;ERROR: ${e.message}&quot;;
+    } finally {
+        if (socket != null) 
+        {
+        	socket.close()
+        }
+        def lock = props.get(&quot;lock&quot;)
+	   synchronized (lock){
+		def requestCount = (props.get(&quot;requestCount&quot;) ?: &quot;0&quot;).toInteger()
+		// Update request count
+			
+			requestCount++
+			props.put(&quot;requestCount&quot;, requestCount.toString())
+	   }
+
+    }
+}
+
+
+
+// Randomly select between SET and GET
+def random = new Random()
+def operation = random.nextBoolean() ? &quot;SET&quot; : &quot;GET&quot;
+
+// Configuration (you can parameterize these with JMeter variables)
+def ip = vars.get(&quot;cache_server_ip&quot;) // Cache server IP
+def port = vars.get(&quot;cache_server_port&quot;).toInteger()     // Cache server port
+// Get the number of virtual users (threads) from JMeter
+
+//def totalThreads = Integer.parseInt(vars.get(&quot;ThreadGroup.num_threads&quot;))
+def totalThreads = props.get(&quot;totalThreads&quot;)?.toInteger() ?: 1
+log.info(&quot;Total Threads (Users) dynamically retrieved: ${totalThreads}&quot;)
+// Get the cached keys from the preprocessor stage (stored in JMeter vars)
+
+def numKeys = props.get(&quot;numKeysSet&quot;).toInteger()
+
+// Fetch the global lock object
+def executor = props.get(&quot;printThreadExecutor&quot;)
+
+
+executor.submit {
+	requestCount=props.get(&quot;requestCount&quot;).toInteger()
+	def percent = (requestCount / totalThreads) * 100.0
+	def barLength = 40  // Length of the progress bar
+	def filledLength = (int)(barLength * percent / 100)
+	def bar = &apos;█&apos; * filledLength + &apos;-&apos; * (barLength - filledLength)
+    while (props.get(&quot;progressRunning&quot;).toBoolean()) {
+    		requestCount=props.get(&quot;requestCount&quot;).toInteger()
+//  		println(&quot;requestCount:${requestCount}&quot;)
+    		percent = (requestCount / totalThreads) * 100.0
+    		filledLength = (int)(barLength * percent / 100)
+    		bar = &apos;█&apos; * filledLength + &apos;-&apos; * (barLength - filledLength)
+		println(&quot;\rProgress: |${bar}| ${String.format(&quot;%.2f&quot;, percent)}% Complete&quot;)
+	     Thread.sleep(100)  // Sleep to control update frequency
+	     if(requestCount==totalThreads){
+	        	props.put(&quot;progressRunning&quot;, &quot;false&quot;) 
+	     }
+//        println(&quot;ProgressRunning:${props.get(&quot;progressRunning&quot;)}&quot;)
+    }
+}
+
+
+// If operation is SET, generate a new key-value pair and set it
+if (operation == &quot;SET&quot;) {
+	
+    def newKey = &quot;key&quot; + randomString(5)
+    def newValue = randomString(6)
+    def setMessage = constructSetMessage(newKey, newValue)
+    def setResponse = sendRequest(setMessage, ip, port, 5)
+    log.info(&quot;SET operation: key=${newKey}, value=${newValue}, response=${setResponse}&quot;)
+} else {
+	
+    // If operation is GET, retrieve the value for the key set in the PreProcessor
+    def randomKeyIndex = random.nextInt(numKeys) + 1
+	def keyToGet = props.get(&quot;key${randomKeyIndex}&quot;)
+    def getMessage = constructGetMessage(keyToGet)
+    def getResponse = sendRequest(getMessage, ip, port, 5)
+//    if (response.startsWith(&quot;\\$&quot;)) { // Valid Redis response
+//                validResponses++
+//            } else if (response == &quot;TIMEOUT&quot;) {
+//                log.info(&quot;Request for key for key: ${key} timed out.&quot;)
+//            } else {
+//                log.info(&quot;Error for key: ${key} -&gt; ${response}&quot;)
+//            }
+    log.info(&quot;GET operation: key=${keyToGet}, response=${getResponse}&quot;)
+}
+
+
+
+
+//synchronized (this){
+//	Thread.sleep(400)
+//}
+
+
+// Calculate and display progress
+</stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+        <ResultCollector guiclass="ViewResultsFullVisualizer" testclass="ResultCollector" testname="View Results Tree">
+          <boolProp name="ResultCollector.error_logging">false</boolProp>
+          <objProp>
+            <name>saveConfig</name>
+            <value class="SampleSaveConfiguration">
+              <time>true</time>
+              <latency>true</latency>
+              <timestamp>true</timestamp>
+              <success>true</success>
+              <label>true</label>
+              <code>true</code>
+              <message>true</message>
+              <threadName>true</threadName>
+              <dataType>true</dataType>
+              <encoding>false</encoding>
+              <assertions>true</assertions>
+              <subresults>true</subresults>
+              <responseData>false</responseData>
+              <samplerData>false</samplerData>
+              <xml>false</xml>
+              <fieldNames>true</fieldNames>
+              <responseHeaders>false</responseHeaders>
+              <requestHeaders>false</requestHeaders>
+              <responseDataOnError>false</responseDataOnError>
+              <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+              <assertionsResultsToSave>0</assertionsResultsToSave>
+              <bytes>true</bytes>
+              <sentBytes>true</sentBytes>
+              <url>true</url>
+              <threadCounts>true</threadCounts>
+              <idleTime>true</idleTime>
+              <connectTime>true</connectTime>
+            </value>
+          </objProp>
+          <stringProp name="filename"></stringProp>
+        </ResultCollector>
+        <hashTree/>
+        <ResultCollector guiclass="SummaryReport" testclass="ResultCollector" testname="Summary Report" enabled="true">
+          <boolProp name="ResultCollector.error_logging">false</boolProp>
+          <objProp>
+            <name>saveConfig</name>
+            <value class="SampleSaveConfiguration">
+              <time>true</time>
+              <latency>true</latency>
+              <timestamp>true</timestamp>
+              <success>true</success>
+              <label>true</label>
+              <code>true</code>
+              <message>true</message>
+              <threadName>true</threadName>
+              <dataType>true</dataType>
+              <encoding>false</encoding>
+              <assertions>true</assertions>
+              <subresults>true</subresults>
+              <responseData>false</responseData>
+              <samplerData>false</samplerData>
+              <xml>false</xml>
+              <fieldNames>true</fieldNames>
+              <responseHeaders>false</responseHeaders>
+              <requestHeaders>false</requestHeaders>
+              <responseDataOnError>false</responseDataOnError>
+              <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+              <assertionsResultsToSave>0</assertionsResultsToSave>
+              <bytes>true</bytes>
+              <sentBytes>true</sentBytes>
+              <url>true</url>
+              <threadCounts>true</threadCounts>
+              <idleTime>true</idleTime>
+              <connectTime>true</connectTime>
+            </value>
+          </objProp>
+          <stringProp name="filename"></stringProp>
+        </ResultCollector>
+        <hashTree/>
+        <ResultCollector guiclass="StatVisualizer" testclass="ResultCollector" testname="Aggregate Report" enabled="true">
+          <boolProp name="ResultCollector.error_logging">false</boolProp>
+          <objProp>
+            <name>saveConfig</name>
+            <value class="SampleSaveConfiguration">
+              <time>true</time>
+              <latency>true</latency>
+              <timestamp>true</timestamp>
+              <success>true</success>
+              <label>true</label>
+              <code>true</code>
+              <message>true</message>
+              <threadName>true</threadName>
+              <dataType>true</dataType>
+              <encoding>false</encoding>
+              <assertions>true</assertions>
+              <subresults>true</subresults>
+              <responseData>false</responseData>
+              <samplerData>false</samplerData>
+              <xml>false</xml>
+              <fieldNames>true</fieldNames>
+              <responseHeaders>false</responseHeaders>
+              <requestHeaders>false</requestHeaders>
+              <responseDataOnError>false</responseDataOnError>
+              <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+              <assertionsResultsToSave>0</assertionsResultsToSave>
+              <bytes>true</bytes>
+              <sentBytes>true</sentBytes>
+              <url>true</url>
+              <threadCounts>true</threadCounts>
+              <idleTime>true</idleTime>
+              <connectTime>true</connectTime>
+            </value>
+          </objProp>
+          <stringProp name="filename"></stringProp>
+        </ResultCollector>
+        <hashTree/>
+        <ResultCollector guiclass="GraphVisualizer" testclass="ResultCollector" testname="Graph Results" enabled="true">
+          <boolProp name="ResultCollector.error_logging">false</boolProp>
+          <objProp>
+            <name>saveConfig</name>
+            <value class="SampleSaveConfiguration">
+              <time>true</time>
+              <latency>true</latency>
+              <timestamp>true</timestamp>
+              <success>true</success>
+              <label>true</label>
+              <code>true</code>
+              <message>true</message>
+              <threadName>true</threadName>
+              <dataType>true</dataType>
+              <encoding>false</encoding>
+              <assertions>true</assertions>
+              <subresults>true</subresults>
+              <responseData>false</responseData>
+              <samplerData>false</samplerData>
+              <xml>false</xml>
+              <fieldNames>true</fieldNames>
+              <responseHeaders>false</responseHeaders>
+              <requestHeaders>false</requestHeaders>
+              <responseDataOnError>false</responseDataOnError>
+              <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+              <assertionsResultsToSave>0</assertionsResultsToSave>
+              <bytes>true</bytes>
+              <sentBytes>true</sentBytes>
+              <url>true</url>
+              <threadCounts>true</threadCounts>
+              <idleTime>true</idleTime>
+              <connectTime>true</connectTime>
+            </value>
+          </objProp>
+          <stringProp name="filename"></stringProp>
+        </ResultCollector>
+        <hashTree/>
+        <ResultCollector guiclass="RespTimeGraphVisualizer" testclass="ResultCollector" testname="Response Time Graph" enabled="true">
+          <boolProp name="ResultCollector.error_logging">false</boolProp>
+          <objProp>
+            <name>saveConfig</name>
+            <value class="SampleSaveConfiguration">
+              <time>true</time>
+              <latency>true</latency>
+              <timestamp>true</timestamp>
+              <success>true</success>
+              <label>true</label>
+              <code>true</code>
+              <message>true</message>
+              <threadName>true</threadName>
+              <dataType>true</dataType>
+              <encoding>false</encoding>
+              <assertions>true</assertions>
+              <subresults>true</subresults>
+              <responseData>false</responseData>
+              <samplerData>false</samplerData>
+              <xml>false</xml>
+              <fieldNames>true</fieldNames>
+              <responseHeaders>false</responseHeaders>
+              <requestHeaders>false</requestHeaders>
+              <responseDataOnError>false</responseDataOnError>
+              <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+              <assertionsResultsToSave>0</assertionsResultsToSave>
+              <bytes>true</bytes>
+              <sentBytes>true</sentBytes>
+              <url>true</url>
+              <threadCounts>true</threadCounts>
+              <idleTime>true</idleTime>
+              <connectTime>true</connectTime>
+            </value>
+          </objProp>
+          <stringProp name="filename"></stringProp>
+        </ResultCollector>
+        <hashTree/>
+        <RandomController guiclass="RandomControlGui" testclass="RandomController" testname="Random Controller" enabled="false">
+          <intProp name="InterleaveControl.style">1</intProp>
+        </RandomController>
+        <hashTree>
+          <TCPSampler guiclass="TCPSamplerGui" testclass="TCPSampler" testname="TCP Sampler for SET" enabled="true">
+            <stringProp name="TCPSampler.server">127.0.0.1</stringProp>
+            <boolProp name="TCPSampler.reUseConnection">true</boolProp>
+            <stringProp name="TCPSampler.port">7069</stringProp>
+            <boolProp name="TCPSampler.nodelay">false</boolProp>
+            <stringProp name="TCPSampler.timeout">5</stringProp>
+            <stringProp name="TCPSampler.ctimeout">2</stringProp>
+            <stringProp name="TCPSampler.request">*3\r\n$3\r\nSET\r\n${__strLen(${randomKey})}\r\n${randomKey}\r\n${__strLen(${randomValue})}\r\n${randomValue}\r\n
+</stringProp>
+            <boolProp name="TCPSampler.closeConnection">false</boolProp>
+            <stringProp name="ConfigTestElement.username"></stringProp>
+            <stringProp name="ConfigTestElement.password"></stringProp>
+          </TCPSampler>
+          <hashTree>
+            <RandomVariableConfig guiclass="TestBeanGUI" testclass="RandomVariableConfig" testname="Random Variable Key" enabled="true">
+              <stringProp name="maximumValue">99999</stringProp>
+              <stringProp name="minimumValue">1</stringProp>
+              <stringProp name="outputFormat">key%05d</stringProp>
+              <boolProp name="perThread">false</boolProp>
+              <stringProp name="randomSeed"></stringProp>
+              <stringProp name="variableName">randomKey</stringProp>
+            </RandomVariableConfig>
+            <hashTree/>
+            <RandomVariableConfig guiclass="TestBeanGUI" testclass="RandomVariableConfig" testname="Random Variable Value" enabled="true">
+              <stringProp name="variableName">randomValue</stringProp>
+              <stringProp name="outputFormat">${__RandomString(6,abcdefghijklmnopqrstuvwxyz,randomValue)}</stringProp>
+              <stringProp name="minimumValue">1</stringProp>
+              <stringProp name="maximumValue">1000000</stringProp>
+              <stringProp name="randomSeed"></stringProp>
+              <boolProp name="perThread">false</boolProp>
+            </RandomVariableConfig>
+            <hashTree/>
+            <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Response Assertion" enabled="true">
+              <collectionProp name="Asserion.test_strings">
+                <stringProp name="43847">+OK</stringProp>
+              </collectionProp>
+              <stringProp name="Assertion.custom_message"></stringProp>
+              <stringProp name="Assertion.test_field">Assertion.response_data</stringProp>
+              <boolProp name="Assertion.assume_success">false</boolProp>
+              <intProp name="Assertion.test_type">2</intProp>
+            </ResponseAssertion>
+            <hashTree/>
+          </hashTree>
+          <TCPSampler guiclass="TCPSamplerGui" testclass="TCPSampler" testname="TCP Sampler for GET" enabled="true">
+            <stringProp name="TCPSampler.server">127.0.0.1</stringProp>
+            <boolProp name="TCPSampler.reUseConnection">true</boolProp>
+            <stringProp name="TCPSampler.port">7069</stringProp>
+            <boolProp name="TCPSampler.nodelay">false</boolProp>
+            <stringProp name="TCPSampler.timeout">5</stringProp>
+            <stringProp name="TCPSampler.ctimeout">2</stringProp>
+            <stringProp name="TCPSampler.request">*2\r\n$3\r\nGET\r\n$${__javaScript(${__length(${__V(key${__Random(1,${numKeysSet})})})})}\r\n${__V(key${__Random(1,${numKeysSet})})}\r\n</stringProp>
+            <boolProp name="TCPSampler.closeConnection">false</boolProp>
+            <stringProp name="ConfigTestElement.username"></stringProp>
+            <stringProp name="ConfigTestElement.password"></stringProp>
+          </TCPSampler>
+          <hashTree>
+            <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Response Assertion" enabled="true">
+              <collectionProp name="Asserion.test_strings">
+                <stringProp name="89587810">^\$.*</stringProp>
+              </collectionProp>
+              <stringProp name="Assertion.custom_message"></stringProp>
+              <stringProp name="Assertion.test_field">Assertion.response_data</stringProp>
+              <boolProp name="Assertion.assume_success">false</boolProp>
+              <intProp name="Assertion.test_type">1</intProp>
+            </ResponseAssertion>
+            <hashTree/>
+          </hashTree>
+        </hashTree>
+      </hashTree>
+      <Arguments guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
+        <collectionProp name="Arguments.arguments">
+          <elementProp name="cache_server_ip" elementType="Argument">
+            <stringProp name="Argument.name">cache_server_ip</stringProp>
+            <stringProp name="Argument.value">127.0.0.1</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="cache_server_port" elementType="Argument">
+            <stringProp name="Argument.name">cache_server_port</stringProp>
+            <stringProp name="Argument.value">7069</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+        </collectionProp>
+      </Arguments>
+      <hashTree/>
+      <SetupThreadGroup guiclass="SetupThreadGroupGui" testclass="SetupThreadGroup" testname="setUp Thread Group">
+        <intProp name="ThreadGroup.num_threads">1</intProp>
+        <intProp name="ThreadGroup.ramp_time">1</intProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller">
+          <stringProp name="LoopController.loops">1</stringProp>
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+        </elementProp>
+      </SetupThreadGroup>
+      <hashTree>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="JSR223 Sampler">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="parameters"></stringProp>
+          <stringProp name="filename"></stringProp>
+          <stringProp name="cacheKey">true</stringProp>
+          <stringProp name="script">import java.io.PrintWriter
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.net.Socket
+
+import java.util.concurrent.TimeUnit
+
+import org.apache.jmeter.util.JMeterUtils
+
+import org.apache.jmeter.engine.StandardJMeterEngine
+import org.apache.jmeter.threads.ThreadGroup
+import org.apache.jorphan.collections.HashTree
+import org.apache.jorphan.collections.SearchByClass
+import java.lang.reflect.Field
+
+class ProgressBar {
+    def total
+    def current = 0
+    def running = true
+    def executor
+    ProgressBar(int total) {
+        this.total = total
+        this.executor = Executors.newSingleThreadExecutor()  // Initialize the executor
+    }
+
+    def update(int count) {
+        this.current = count
+    }
+
+    def display() {
+        executor.submit {
+		while (running) {
+                def percent = (current / total) * 100
+                def barLength = 40  // Length of the progress bar
+                def filledLength = (int)(barLength * percent / 100)
+                def bar = &apos;█&apos; * filledLength + &apos;-&apos; * (barLength - filledLength)
+
+                // Display the progress bar in logs or console
+                print(&quot;\rProgress: |${bar}| ${String.format(&quot;%.2f&quot;, percent)}% Complete&quot;)
+                Thread.sleep(100)
+		}
+        }
+    }
+
+    def stop() {
+        this.running = false
+        println(&quot;\nProgress complete!&quot;)
+
+        // Properly shut down the executor and wait for termination
+        executor.shutdown()
+        try {
+            if (!executor.awaitTermination(1, TimeUnit.SECONDS)) {
+                executor.shutdownNow()  // Force shutdown if it takes too long
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow()
+            Thread.currentThread().interrupt()
+        }
+    }
+}
+
+// Helper function to generate random strings
+def randomString(int length) {
+    def chars = &apos;abcdefghijklmnopqrstuvwxyz&apos;;
+    def random = new Random()
+    (1..length).collect { chars[random.nextInt(chars.length())] }.join()
+}
+
+// Construct a SET message
+def constructSetMessage(String key, String value) {
+    return &quot;*3\r\n\\$3\r\nSET\r\n\\$${key.length()}\r\n${key}\r\n\\$${value.length()}\r\n${value}\r\n&quot;;
+}
+
+// Function to send a TCP request
+def sendRequest(String message, String ip, int port, int timeout) {
+    Socket socket = null
+    try {
+        socket = new Socket(ip, port)
+        socket.setSoTimeout(timeout * 1000)  // Set timeout in milliseconds
+
+        // Send the request
+        PrintWriter out = new PrintWriter(socket.getOutputStream(), true)
+        out.print(message)
+        out.flush()
+
+        // Read the response
+        BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))
+        def response = in.readLine()
+        return response
+
+    } catch (Exception e) {
+        return &quot;ERROR: ${e.message}&quot;;
+    } finally {
+        if (socket != null) socket.close()
+    }
+}
+
+// Function to set key-value pairs
+def setKeys(String ip, int port, Map&lt;String, String&gt; keyValuePairs) {
+	// Initialize valid response counter
+    def validResponsesCount = 0
+    ProgressBar progressBar = new ProgressBar(keyValuePairs.size())	
+	progressBar.display()
+	// Initialize the counter
+    int i = 0
+    keyValuePairs.each { key, value -&gt;
+        def message = constructSetMessage(key, value)
+        log.info(&quot;Sending message to set key ${key}: ${message}&quot;)  // Log the message before sending the request
+        def response = sendRequest(message, ip, port, 5)
+        if (!response.contains(&quot;+OK&quot;)) {
+            log.info(&quot;Error setting key ${key}: ${response}&quot;)
+        }
+        else{
+        	validResponsesCount=validResponsesCount+1
+        	props.put(&quot;key${i}&quot;, key)
+        }
+        i++
+        progressBar.update(i)
+    }
+    Thread.sleep(200)
+    progressBar.stop()
+    props.put(&quot;numKeysSet&quot;, validResponsesCount.toString())
+    println(&quot;ValidResponseCount: ${validResponsesCount}&quot;)
+    def numKeys = props.get(&quot;numKeysSet&quot;).toInteger()
+    println(&quot;numKeysSet: ${numKeys}&quot;)
+    return validResponsesCount
+}
+
+// Configuration (you can parameterize these with JMeter variables)
+def ip = vars.get(&quot;cache_server_ip&quot;) // Cache server IP
+def port = vars.get(&quot;cache_server_port&quot;).toInteger()    // Cache server port
+
+def basePairs = 50   
+
+
+
+log.info(&quot; Setting ${basePairs} key-value pairs.&quot;)
+// Generate random key-value pairs
+def keyValuePairs = [:]
+for (int i = 1; i &lt;= basePairs; i++) {
+   def key = &quot;key${i}&quot;
+   def value = randomString(6)
+   keyValuePairs[key] = value
+}
+
+// Set the keys in the cache
+println(&quot;Setting ${basePairs} keys&quot;)
+def validResponsesCount = setKeys(ip, port, keyValuePairs)
+log.info(&quot;${validResponsesCount} keys have been set&quot;)
+println(&quot;${validResponsesCount} keys have been set&quot;)
+
+props.put(&quot;lock&quot;, new Object())
+
+def executor = Executors.newSingleThreadExecutor()
+
+props.put(&quot;printThreadExecutor&quot;, executor )
+props.put(&quot;progressRunning&quot;, &quot;true&quot;) 
+
+// Get the JMeter Engine
+StandardJMeterEngine engine = ctx.getEngine()
+// Use reflection to get access to the internal test plan tree
+Field test = engine.getClass().getDeclaredField(&quot;test&quot;)
+test.setAccessible(true)
+HashTree testPlanTree = (HashTree) test.get(engine)
+// Search for all ThreadGroups in the test plan
+SearchByClass&lt;ThreadGroup&gt; threadGroupSearch = new SearchByClass&lt;&gt;(ThreadGroup.class)
+testPlanTree.traverse(threadGroupSearch)
+Collection&lt;ThreadGroup&gt; threadGroups = threadGroupSearch.getSearchResults()
+// Loop through and print thread group names and their number of threads
+threadGroups.each { 
+    log.info(&quot;Thread Group: &quot; + it.getName() + &quot;; Number of threads: &quot; + it.getNumThreads())
+    // You can save the number of threads for later use
+    if (it.getName() == &quot;Thread Group&quot;) {  // or use a specific group name
+        props.put(&quot;totalThreads&quot;, it.getNumThreads().toString())
+        props.put(&quot;rampTime&quot;,it.getRampUp().toString())
+    }
+}
+
+println(&quot;Set Up ran&quot;)
+println(&quot;Running a load test involving random get and set requests with ${props.get(&quot;totalThreads&quot;)} threads(Virtual Users) and ramp up period of ${props.get(&quot;rampTime&quot;)} seconds&quot;)
+Thread.sleep(4000)
+println(&quot;starting now...&quot;)
+
+</stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+      </hashTree>
+      <PostThreadGroup guiclass="PostThreadGroupGui" testclass="PostThreadGroup" testname="tearDown Thread Group" enabled="true">
+        <intProp name="ThreadGroup.num_threads">1</intProp>
+        <intProp name="ThreadGroup.ramp_time">1</intProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller">
+          <stringProp name="LoopController.loops">1</stringProp>
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+        </elementProp>
+      </PostThreadGroup>
+      <hashTree>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="JSR223 Sampler">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="parameters"></stringProp>
+          <stringProp name="filename"></stringProp>
+          <stringProp name="cacheKey">true</stringProp>
+          <stringProp name="script">import java.io.PrintWriter
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.net.Socket
+
+import java.util.concurrent.TimeUnit
+
+import org.apache.jmeter.util.JMeterUtils
+
+def executor = props.get(&quot;printThreadExecutor&quot;)
+
+executor.shutdown()
+        try {
+            if (!executor.awaitTermination(1, TimeUnit.SECONDS)) {
+                executor.shutdownNow()  // Force shutdown if it takes too long
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow()
+            Thread.currentThread().interrupt()
+        }
+
+println(&quot;Test Finished&quot;) </stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>

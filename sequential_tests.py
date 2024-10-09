@@ -4,6 +4,7 @@ import random
 import string
 import argparse
 import threading
+import sys
 from progress_bar import ProgressBar  # Import the ProgressBar class
 
 # Helper function to send TCP request to the cache server
@@ -30,18 +31,18 @@ def random_string(length):
 # Set test (50 key-value pairs)
 def set_test(ip, port, key_value_pairs, progress_bar):
     total_pairs = len(key_value_pairs)
-    for index, (key, value) in enumerate(key_value_pairs.items()):
-        message = construct_set_message(key, value)
-        response = send_request(message, ip, port)
-        print(f"\nSet {key}: {response.strip()}")
-        if "+OK" not in response:
-            print(f"Error setting key {key}")
+    with open("sequential_test_logs.log", "a") as log_file:
+        for index, (key, value) in enumerate(key_value_pairs.items()):
+            message = construct_set_message(key, value)
+            response = send_request(message, ip, port)
+            log_file.write(f"\nSet {key}: {response.strip()}")
+            if "+OK" not in response:
+                log_file.write(f"Error setting key {key}")
+            
+            # Update progress
+            progress_bar.update(index + 1)
         
-        # Update progress
-        progress = (index + 1) / total_pairs * 100
-        print(f"\rProgress: {progress:.2f}% complete", end='')
-        progress_bar.update(index + 1)
-
+    time.sleep(0.2) 
     progress_bar.stop()  # Stop the progress bar after completion
     print("\nSET requests completed.")
 
@@ -50,28 +51,27 @@ def sequential_get_test(ip, port, key_value_pairs, progress_bar):
     total_keys = len(key_value_pairs)
     total_time = 0
     valid_responses_count = 0  # Track the number of valid responses
-    
-    for index, key in enumerate(key_value_pairs.keys()):
-        message = construct_get_message(key)
+    with open("sequential_test_logs.log", "a") as log_file:
+        for index, key in enumerate(key_value_pairs.keys()):
+            message = construct_get_message(key)
+            
+            start_time = time.time()
+            response = send_request(message, ip, port)
+            end_time = time.time()
+            
+            duration = end_time - start_time
+            log_file.write(f"\nRetrieved {key} in {duration:.6f} seconds")
+            log_file.write(f"Response: {response.strip()}")
+            
+            # Check if the response is valid (starts with "$")
+            if response.strip().startswith("$"):
+                total_time += duration
+                valid_responses_count += 1  # Increment valid response count
+            
+            # Update progress
+            progress_bar.update(index + 1)
         
-        start_time = time.time()
-        response = send_request(message, ip, port)
-        end_time = time.time()
-        
-        duration = end_time - start_time
-        print(f"\nRetrieved {key} in {duration:.6f} seconds")
-        print(f"Response: {response.strip()}")
-        
-        # Check if the response is valid (starts with "$")
-        if response.strip().startswith("$"):
-            total_time += duration
-            valid_responses_count += 1  # Increment valid response count
-        
-        # Update progress
-        progress = (index + 1) / total_keys * 100
-        print(f"\rProgress: {progress:.2f}% complete", end='')
-        progress_bar.update(index + 1)
-
+    time.sleep(0.2) 
     progress_bar.stop()  # Stop the progress bar after completion
     print("\nGET requests completed.")
 
@@ -109,10 +109,11 @@ if __name__ == "__main__":
     
     # Start the progress bar thread for SET requests
     progress_thread_set = threading.Thread(target=progress_bar_set.display)
-    progress_thread_set.start()
+    
 
     # Perform SET requests
     print("Starting SET requests...")
+    progress_thread_set.start()
     set_test(cache_server_ip, cache_server_port, key_value_pairs, progress_bar_set)
     
     # Wait for the progress thread to finish
@@ -123,10 +124,11 @@ if __name__ == "__main__":
     
     # Start the progress bar thread for GET requests
     progress_thread_get = threading.Thread(target=progress_bar_get.display)
-    progress_thread_get.start()
+    
     
     # Perform GET requests after setting the values
     print("\nStarting GET requests...")
+    progress_thread_get.start()
     sequential_get_test(cache_server_ip, cache_server_port, key_value_pairs, progress_bar_get)
     
     # Wait for the progress thread to finish

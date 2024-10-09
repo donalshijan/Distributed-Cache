@@ -387,7 +387,6 @@ std::string CacheNode::processRequest(const std::string& request) {
         pos += key_length + 2; // Move past key and "\r\n"
         std::string value = get(key);
         // Check if the value is empty
-        std::cout<<"\n[CacheNode] the value:"<<value<<std::endl;
         if (value.empty()) {
             // Return Redis-like nil response
             return "$-1\r\n";
@@ -541,8 +540,7 @@ void CacheNode::addNodeToCluster(const std::string& cluster_manager_ip, int clus
         this->start_node_server();
     }
     else{
-        std::cout<<response;
-        std::cout<<"[CacheNode] Failed to add Node to cluster"<<std::endl;
+        std::cout<<"[CacheNode] Failed to add Node to cluster"<<response<<std::endl;
     }
 }
 

@@ -145,5 +145,25 @@ If you are building the project first time, you might not have a conan profile c
 To build and run tests you can simply run the following script
 
     chmod +x build_and_run_tests.sh
-    ./build_and_run_tests.sh
+    ./build_and_run_tests.sh 
+This will first build and then run unit tests and then run two performance tests written in sequential_tests.py and concurrent_tests.py.
 
+The concurrent tests in concurrent_tests.py is implemented using asynchronous tasks where each request is set to be fired from a different coroutine, even though ideally we want them all to be fired at once, but there will always be some offset because asynchronous makes code non blocking by not having to wait for time consuming IO tasks to complete and does not guarantee parallelism.
+That being said this test is very lightweight and can give a good ball park estimate on the performance capability of the current system.
+
+alternatively you can run the jmeter concurrency test, but you will need jmeter installed on your machine, if so 
+
+    chmod +x build_and_run_jmeter_concurrency_test.sh
+    ./build_and_run_jmeter_concurrency_test.sh 
+
+Now this test although if I am being honest seemed a little sketchy at first because how dramatically wide the range of results were each time when run , but upon further analysis it seems to be a more realistic simulation of concurrent requests, the results of this test are more conservative than the python implementation's async based tests. This test runs all concurrent request tasks in seperate threads , which still isn't possible to be fired all at once because as we know, threads, even though theoretially parallel, still don't run completely in parallel but rather creates an illusion of concurrency by frequent context switching between threads.
+That being said, do not be under the impression that this test isn't good enough, despite not being exactly concurrent, this is probably as close as it can get to simulate concurrent requests on a single machine and threads do leverage parallelism or may I say 'concurrency', significantly more than async coroutines, which is evident in the results as thread based implementation was lagging behind in number of successful responses for requests indicating it definitely flooded the server with requests more concurrently than async based test, causing server to not be able to handle all of them at once.
+
+The same thread based test could also be implemented in python just as easily as async based test, only reason I used jmeter is because I wanted to give it a shot.
+
+As a side note, I would like to mention that to implement a true concurrency capability test for a server or system, we would need multiple different physical machines, as many as we want to test the concurrency handling capability upto, and then set up a cron job on all those machines to fire a request at exactly the same time to a server, and then check who all got a valid response back, count of those is the true concurrency handling capacity of the system tested. Which is definitely more challenging financially and to set up and manage all those machines.
+
+Furthermore, we also have a small load test written in jmeter, where it will first set 50 keys and then it will make 100 threads (virtual users) make random get and set requests to server over a ramp up period of 10 seconds. To run the load test
+
+    chmod +x build_and_run_jmeter_load_test.sh    
+    ./build_and_run_jmeter_load_test.sh 

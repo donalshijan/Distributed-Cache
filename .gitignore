@@ -7,9 +7,11 @@ build/
 myenv
 *.log
 results.txt
+JmeterConcurrencyTestResults.txt
 __pycache__
 Testing
 distributed-cache-437300-735646e62545.json
 *.tfvars
 *terraform*
 .DS_Store
+*.jtl

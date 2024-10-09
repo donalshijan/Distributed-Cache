@@ -218,7 +218,6 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
                     return std::string("Error: ") + e.what();
                 }
                 if (!response.empty() && response[0] == '$') { // Assuming a valid response starts with '$'
-                    std::cout << "[Cache] Response from node " << node.ip << ":" << node.port << " - " << response << std::endl;
                     if(response!="$-1\r\n"){
                         return response;
                     }   
@@ -244,7 +243,6 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
                 // Valid node, proceed with sending request
                 std::string response;
                 try{
-                    std::cout<<"[Cache] nodeip:"<<node.ip<<std::endl<<"nodeport:"<<node.port<<std::endl;
                     response=sendToNode(node.ip, node.port, request);
                 }catch (const std::runtime_error& e) {
                     std::cerr << "[Cache] Error: " << e.what() << std::endl;
@@ -392,6 +390,14 @@ void Cache::handle_client(int new_socket){
             pos += 6; // Move past "\r\n$_\r\n"
         }
         // Process the request (simple GET and SET handling)
+        try{
+            std::string s = request.substr(pos, 3);
+        }
+        catch(const std::exception& e) {
+            std::cout << "Caught a standard exception: " << e.what() << std::endl;
+            close(new_socket);
+            return;
+        }
         if (request.substr(pos, 3) == "GET") {
             // Extract key from request
             // size_t key_start = request.find("\r\n", 4) + 2;
