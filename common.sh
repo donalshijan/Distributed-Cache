@@ -74,7 +74,7 @@ setup_cluster() {
 
 # Function to add nodes to the cluster
 add_nodes_to_cluster() {
-    NODE_PORTS=(7070 7071 7072 7073)
+    NODE_PORTS=(7070 7071 7072 7073 7074 7075 7076 7077 7078 7079)
     MEMORY_LIMIT=1048576
     EVICTION_TIME=500
 

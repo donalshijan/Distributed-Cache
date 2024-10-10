@@ -12,7 +12,7 @@ All communications with and within the system uses a custom message protocol imp
 
 Cache server will be set up and running on a machine and listening to requests from system admin for configuring the Cache cluster along with requests from clients accessing cache data.
 
-Cache Node is to be set up and initialized and configured to be added to a particular cluster by sending a message to the cache server specifying it's own identifier across the internet which includes the ip of the machine where the node is set up and port on which the cache node server will be listening, this message is sent across internet to the cache server which is identified by the ip of the machine running the cache server and the port on which it listens. The cache server managing a cache cluster processes this request to add new node and updates it's cluster details to update the info regarding addition of new node. Successful addition and acknowledgement message is sent back to the cache node as response to the request it made upon which it starts it's server at the ip and port it specified in it's message to cache server and starts listening for requests.
+Cache Node is to be set up and initialized and configured to be added to a particular cluster by sending a message to the cache server specifying it's own identifier across the internet which includes the ip of the machine where the node is set up and port on which the cache node server will be listening, this message is sent across internet to the cache server which is identified by the ip of the machine running the cache server and the port on which it listens. The cache server managing a cache cluster processes this request to add new node and updates it's cluster details to update the info regarding addition of new node. Successful addition and acknowledgement message is sent back to the cache node as response to the request it made, upon which it starts it's server at the ip and port it specified in it's message to cache server and starts listening for requests.
 
 We can set up cache nodes on any machine across the internet and configure it to be added to the cluster managed by a specific cache server, once it gets added, clients can access data across all nodes in that cluster without ever knowing about underlying topology of nodes and can access the data without ever worrying about routing the request to the nodes or handling responses for finding a key, instead cache server is the single endpoint for clients to access data, cache server in turn will route requests across all nodes to fetch or set data and returns appropriate response to clients.
 
@@ -44,6 +44,10 @@ After installing cmake and conan.
 It is highly recommended to use the script mentioned in the Test section below to build and run tests.
 
 But if you don't want to use the script and build manually here are the steps.
+
+If you are building the project first time, you might not have a conan profile created so run the following command to create a conan profile
+
+    conan profile detect
 
 In the project root directry
 run the command
@@ -149,14 +153,14 @@ To build and run tests you can simply run the following script
 This will first build and then run unit tests and then run two performance tests written in sequential_tests.py and concurrent_tests.py.
 
 The concurrent tests in concurrent_tests.py is implemented using asynchronous tasks where each request is set to be fired from a different coroutine, even though ideally we want them all to be fired at once, but there will always be some offset because asynchronous makes code non blocking by not having to wait for time consuming IO tasks to complete and does not guarantee parallelism.
-That being said this test is very lightweight and can give a good ball park estimate on the performance capability of the current system.
+That being said, this test is very lightweight and can give a good ball park estimate on the performance capability of the current system.
 
 alternatively you can run the jmeter concurrency test, but you will need jmeter installed on your machine, if so 
 
     chmod +x build_and_run_jmeter_concurrency_test.sh
     ./build_and_run_jmeter_concurrency_test.sh 
 
-Now this test although if I am being honest seemed a little sketchy at first because how dramatically wide the range of results were each time when run , but upon further analysis it seems to be a more realistic simulation of concurrent requests, the results of this test are more conservative than the python implementation's async based tests. This test runs all concurrent request tasks in seperate threads , which still isn't possible to be fired all at once because as we know, threads, even though theoretially parallel, still don't run completely in parallel but rather creates an illusion of concurrency by frequent context switching between threads.
+Now this test although if I am being honest seemed a little sketchy at first because how dramatically wide the range of results were each time when run , but upon further analysis it seems to be a more realistic simulation of concurrent requests, the results of this test are more conservative than the python implementation's async based tests. This test runs all concurrent request tasks in seperate threads , which still isn't possible to be fired all at once because as we know, threads, even though theoretially parallel, still don't run completely in parallel but rather creates an illusion of parllelism, which is more appropriately called "concurrency" by frequent context switching between threads.
 That being said, do not be under the impression that this test isn't good enough, despite not being exactly concurrent, this is probably as close as it can get to simulate concurrent requests on a single machine and threads do leverage parallelism or may I say 'concurrency', significantly more than async coroutines, which is evident in the results as thread based implementation was lagging behind in number of successful responses for requests indicating it definitely flooded the server with requests more concurrently than async based test, causing server to not be able to handle all of them at once.
 
 The same thread based test could also be implemented in python just as easily as async based test, only reason I used jmeter is because I wanted to give it a shot.
