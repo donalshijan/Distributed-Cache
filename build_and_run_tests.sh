@@ -38,9 +38,7 @@ pip3 install -r requirements.txt
 
 if [ -f "sequential_test_logs.log" ]; then
     rm "sequential_test_logs.log"
-    echo "sequential_test_logs.log deleted."
-else
-    echo "sequential_test_logs.log does not exist."
+    echo "old sequential_test_logs.log deleted."
 fi
 
 # Run sequential tests
@@ -49,9 +47,7 @@ python3 sequential_tests.py --cache_server_ip "$CLUSTER_IP" --cache_server_port 
 
 if [ -f "concurrent_test_logs.log" ]; then
     rm "concurrent_test_logs.log"
-    echo "concurrent_test_logs.log deleted."
-else
-    echo "concurrent_test_logs.log does not exist."
+    echo "old concurrent_test_logs.log deleted."
 fi
 # Run concurrent tests
 echo "Running concurrent tests..."
@@ -63,3 +59,4 @@ echo "All tests completed."
 cleanup
 
 echo "See Test results in results.txt"
+echo "See test logs in sequential_test_logs.log and concurrent_test_logs.log"

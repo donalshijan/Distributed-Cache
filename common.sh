@@ -68,7 +68,7 @@ setup_cluster() {
         sleep 1
     done
 
-    CLUSTER_ID=$(grep 'Cluster ID:' cluster_output.log | awk '{print $3}')
+    CLUSTER_ID=$(grep 'Cluster' cluster_output.log | awk '{print $9}')
     echo "Cluster ID: $CLUSTER_ID"
 }
 
@@ -80,7 +80,7 @@ add_nodes_to_cluster() {
 
     for PORT in "${NODE_PORTS[@]}"; do
         LOG_FILE="node_${PORT}_output.log"
-        echo "Starting node on port $PORT..."
+        echo "Creating new node on port $PORT..."
         ./build/Release/distributed_cache add_new_node_to_existing_cluster \
             --memory_limit "$MEMORY_LIMIT" \
             --time_till_eviction "$EVICTION_TIME" \
@@ -92,12 +92,17 @@ add_nodes_to_cluster() {
         NODE_PID=$!
         PIDS+=("$NODE_PID")
 
-        echo "Waiting for node $PORT to finish setup..."
-        while ! grep -q 'Cache Node Server is running on' "$LOG_FILE"; do
+        echo "Waiting for node on $PORT to finish setup..."
+        while ! grep -q 'Cache Node created' "$LOG_FILE"; do
             sleep 1
         done
 
-        NODE_ID=$(grep 'Node Id:' "$LOG_FILE" | awk '{print $3}')
-        echo "Node $NODE_ID started on port $PORT."
+        NODE_ID=$(grep 'node id' "$LOG_FILE" | awk '{print $9}')
+        echo "Node created with ID: $NODE_ID"
+
+        while ! grep -q 'Cache Node Server' "$LOG_FILE"; do
+            sleep 1
+        done
+        echo "Node with ID: $NODE_ID started on port $PORT."
     done
 }

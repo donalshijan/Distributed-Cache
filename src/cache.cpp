@@ -350,7 +350,7 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
         std::cerr << "[Cache] Failed to set socket to non-blocking mode." << std::endl;
         close(server_fd); // Clean up the socket if the operation failed
     }
-    std::cout<<"[Cache] Cluster Manager is Active for Cluster ID:"<<this->cluster_id_<<std::endl;
+    std::cout<<"[Cache] Cluster Manager is Active for Cluster ID: "<<this->cluster_id_<<std::endl;
     std::cout << "[Cache] Cache server started and listening on " << ip_ << ":" << port_ << std::endl;
     while (!this->stopServer.load()) {
         // Accept incoming connections

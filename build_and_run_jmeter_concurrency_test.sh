@@ -33,3 +33,4 @@ echo "All tests completed."
 cleanup
 
 echo "See Test results in JmeterConcurrencyTestResults.txt"
+echo "See Test logs in JmeterConcurrencyTestFiles/testlogs.log"
