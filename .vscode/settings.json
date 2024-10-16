@@ -53,6 +53,7 @@
         "map": "cpp",
         "queue": "cpp",
         "deque": "cpp",
-        "__memory": "cpp"
+        "__memory": "cpp",
+        "condition_variable": "cpp"
     }
 }

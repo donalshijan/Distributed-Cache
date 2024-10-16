@@ -544,13 +544,141 @@ void CacheNode::addNodeToCluster(const std::string& cluster_manager_ip, int clus
     }
 }
 
-void CacheNode::shutDown_node_server(){
+
+     void CacheNode::shutDown_node_server(){
         this->stopServer.store(true);
+        char wakeup_signal = 1;  // Any data will do
+        if (write(wakeup_pipe[1], &wakeup_signal, sizeof(wakeup_signal)) == -1) {
+        std::cerr << "[Cache] Failed to write to wakeup pipe: " << strerror(errno) << std::endl;
+        }
     }
 int setNonBlocking(int socket) {
     int flags = fcntl(socket, F_GETFL, 0);
     if (flags == -1) return -1;
     return fcntl(socket, F_SETFL, flags | O_NONBLOCK);
+}
+
+    bool CacheNode::isServerStopped() const {
+        return stopServer.load();
+    }
+    void CacheNode::handleClient(int new_socket) {
+        handle_client(new_socket);
+    }
+
+void accept_connections(int kq, CacheNode* cache_node,int server_fd,int kq_client,int wakeup_pipe[2]) {
+        struct timespec timeout;
+        timeout.tv_sec = 1;  // 1 second timeout
+        timeout.tv_nsec = 0;
+    while (!cache_node->isServerStopped()) {
+
+        struct kevent event;
+        int nev = kevent(kq, NULL, 0, &event, 1, NULL);  // Wait for a connection event
+        // std::cout << "[CacheNode] accept thread kevent returned with nev = " << nev << std::endl;
+        if (nev == -1) {
+            std::cerr << "[CacheNode] Error with kevent (accept loop): " << strerror(errno) << std::endl;
+            break;
+        }
+
+        if (nev == 0) {
+           
+            // No events, check if stopServer is set
+            if (cache_node->isServerStopped())
+            {  
+                break;
+                }
+
+        }
+         if (nev > 0) {
+            if (event.ident == wakeup_pipe[0]) {
+                // Received wakeup signal, break out of loop
+                std::cout << "[CacheNode] Wakeup signal received, shutting down accept loop." << std::endl;
+                break;
+            }
+        }
+
+        if (event.flags & EV_ERROR) {
+                std::cerr << "[CacheNode] Kqueue error on fd: " << event.ident << std::endl;
+                continue;
+            }
+        if (event.ident == server_fd ) {
+            // New connection ready to accept
+            int new_socket;
+            struct sockaddr_in address;
+            socklen_t addrlen = sizeof(address);
+            
+            while ((new_socket = accept(server_fd, (struct sockaddr*)&address, &addrlen)) >= 0) {
+                if (cache_node->isServerStopped())
+                { 
+                    break;
+                }
+                if (setNonBlocking(new_socket) == -1) {
+                    std::cerr << "[CacheNode] Failed to set client socket to non-blocking mode." << std::endl;
+                    close(new_socket);
+                } else {
+                    std::cout << "[CacheNode] New connection accepted." << std::endl;
+
+                    // Register the new socket for read events
+                    EV_SET(&event, new_socket, EVFILT_READ, EV_ADD, 0, 0, NULL);
+                    if (kevent(kq_client, &event, 1, NULL, 0, NULL) == -1) {
+                        std::cerr << "[CacheNode] Failed to register new_socket with kqueue." << std::endl;
+                        close(new_socket);
+                    }
+                }
+            }
+            if (errno != EWOULDBLOCK && errno != EAGAIN) {
+                std::cerr << "[CacheNode] Error on accept: " << strerror(errno) << std::endl;
+            }
+        }
+    }
+}
+
+void handle_client_connections(int kq, CacheNode* cache_node,int server_fd,int wakeup_pipe[2]) {
+    struct timespec timeout;
+    timeout.tv_sec = 1;  // 1 second timeout
+    timeout.tv_nsec = 0;
+    while (!cache_node->isServerStopped()) {
+
+        struct kevent event;
+        struct kevent events[10];
+        int nev = kevent(kq, NULL, 0, events, 10, NULL);  // Wait for read events
+        if (nev == -1) {
+            std::cerr << "[CacheNode] Error with kevent (client event loop): " << strerror(errno) << std::endl;
+            break;
+        }
+        if (nev == 0) {
+            // No events, check if stopServer is set
+            if (cache_node->isServerStopped()) {
+                break;
+                }
+        }
+        if (nev > 0) {
+            if (event.ident == wakeup_pipe[0]) {
+                // Received wakeup signal, break out of loop
+                std::cout << "[CacheNode] Wakeup signal received, shutting down accept loop." << std::endl;
+                break;
+            }
+        }
+        for (int i = 0; i < nev; i++) {
+            if (cache_node->isServerStopped())
+            { 
+                break;
+            }
+            if (events[i].flags & EV_ERROR) {
+                std::cerr << "[CacheNode] Kqueue error on fd: " << events[i].ident << std::endl;
+                continue;
+            }
+
+            // Check if the event is a read event (EVFILT_READ) for the client socket
+            if (events[i].filter == EVFILT_READ && events[i].ident!=server_fd) {
+                int client_fd = events[i].ident;
+                cache_node->handleClient(client_fd);
+                std::cout << "[CacheNode] Client connection closed." << std::endl;
+                // Remove client socket from kqueue
+                EV_SET(&event, client_fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+                kevent(kq, &event, 1, NULL, 0, NULL);
+            }
+            }
+    }
 }
 
 void CacheNode::start_node_server() {
@@ -586,6 +714,58 @@ void CacheNode::start_node_server() {
         throw std::runtime_error("Listen failed.");
     }
 
+    // Create two kqueues
+    int kq_accept = kqueue();  // For accepting connections
+        if (kq_accept == -1) {
+            close(server_socket);
+            throw std::runtime_error("Failed to create kqueue.");
+        }
+    int kq_client = kqueue();  // For handling client events
+        if (kq_client == -1) {
+            close(server_socket);
+            throw std::runtime_error("Failed to create kqueue.");
+        }
+    
+    struct kevent event;
+    // Register server socket in kq_accept
+    EV_SET(&event, server_socket, EVFILT_READ, EV_ADD, 0, 0, NULL);
+    if (kevent(kq_accept, &event, 1, NULL, 0, NULL) == -1) {
+        close(server_socket);
+        throw std::runtime_error("Failed to register server_socket with kqueue.");
+    }
+    EV_SET(&event, server_socket, EVFILT_READ, EV_ADD, 0, 0, NULL);
+    if (kevent(kq_client, &event, 1, NULL, 0, NULL) == -1) {
+        close(server_socket);
+        throw std::runtime_error("Failed to register server_socket with kqueue.");
+    }
+
+   
+    if (pipe(wakeup_pipe) == -1) {
+        close(server_socket);
+        throw std::runtime_error("Failed to create wakeup pipe.");
+    } else {
+    std::cout << "[CacheNode] Wakeup pipe created successfully" << std::endl;
+}
+    // Set both ends of the pipe to non-blocking
+    setNonBlocking(wakeup_pipe[0]);
+    setNonBlocking(wakeup_pipe[1]);
+
+    // Register the read end of the wakeup pipe with kqueue
+    EV_SET(&event, wakeup_pipe[0], EVFILT_READ, EV_ADD, 0, 0, NULL);
+    if (kevent(kq_accept, &event, 1, NULL, 0, NULL) == -1) {
+        close(server_socket);
+        throw std::runtime_error("Failed to register wakeup pipe with kqueue.");
+    } else {
+    std::cout << "[CacheNode] Wakeup pipe registered with kqueue" << std::endl;
+}
+EV_SET(&event, wakeup_pipe[0], EVFILT_READ, EV_ADD, 0, 0, NULL);
+    if (kevent(kq_client, &event, 1, NULL, 0, NULL) == -1) {
+        close(server_socket);
+        throw std::runtime_error("Failed to register wakeup pipe with kqueue.");
+    } else {
+    std::cout << "[CacheNode] Wakeup pipe registered with kqueue" << std::endl;
+}
+
     std::vector<std::thread> workerThreads;
     
     if(strategy_==EvictionStrategy::LRU){
@@ -609,19 +789,19 @@ void CacheNode::start_node_server() {
         std::cerr << "[CacheNode]  Failed to set socket to non-blocking mode." << std::endl;
         close(server_socket); // Clean up the socket if the operation failed
     }
-    std::cout << "[CacheNode] Cache Node Server is running on  "<<this->ip_<<":"<< this->port_ << std::endl;
-    while (!this->stopServer.load()) {
-        int client_socket = accept(server_socket, nullptr, nullptr);
-        if (client_socket >= 0) {
-            handle_client(client_socket);
-        } else if (errno != EWOULDBLOCK && errno != EAGAIN) {
-            // Handle other errors
-            std::cerr << "[CacheNode]  Error on accept: " << strerror(errno) << std::endl;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));  // Add small sleep to avoid busy loop
-    }
 
+    std::thread acceptThread([this, kq_accept,server_socket,kq_client] {
+    accept_connections(kq_accept, this,server_socket,kq_client,this->wakeup_pipe);
+});
+    std::thread clientEventThread([this, kq_client,server_socket] {
+    handle_client_connections(kq_client,this,server_socket,this->wakeup_pipe);
+});
+    std::cout << "[CacheNode] Cache Node Server is running on  "<<this->ip_<<":"<< this->port_ << std::endl;
+    acceptThread.join();
+    clientEventThread.join();
     close(server_socket);
+    close(kq_accept);         
+    close(kq_client);
     // Join all worker threads
     for (auto& t : workerThreads) {
         if (t.joinable()) {
