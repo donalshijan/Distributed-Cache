@@ -52,15 +52,9 @@ public:
     void shutDownCacheServer();
     bool isServerStopped() const;
     void handleClient(int new_socket); 
-    std::queue<int>& getClientQueue();
-    std::mutex& getQueueMutex();
-    std::condition_variable& getQueueConditionVariable();
     // std::string getPublicIp();
 
 private:
-    std::queue<int> client_queue;
-    std::mutex queue_mutex;
-    std::condition_variable queue_cv;
     std::queue<std::tuple<int, std::string>> get_queue;
     std::queue<std::tuple<int, std::string>> set_queue;
     std::mutex get_mutex;
@@ -80,7 +74,6 @@ private:
     // Helper function to send data over TCP/IP
     std::string sendToNode(const std::string& ip, int port, const std::string& request);
     void handle_client(int new_socket);
-    void handleClientWorker(int kq, struct kevent &event);
     void get_handler();
     void set_handler();
 };
@@ -114,7 +107,7 @@ public:
     void shutDown_node_server();
     std::future<void> remove_future_;
     bool isServerStopped() const;
-    void handleClient(int new_socket); 
+    void handleClient(int new_socket);
 
 private:
     struct LFUComparator {
@@ -153,7 +146,6 @@ private:
     void lazyDeleteStaleEntry();
     std::string sendToNode(const std::string& ip, int port, const std::string& request);
     void addNodeToCluster(const std::string& cluster_manager_ip, int cluster_manager_port);
-    void handleClientWorker(int kq, struct kevent &event); 
 };
 
 #endif // CACHE_NODE_H

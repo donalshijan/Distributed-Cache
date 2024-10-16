@@ -789,7 +789,7 @@ EV_SET(&event, wakeup_pipe[0], EVFILT_READ, EV_ADD, 0, 0, NULL);
         std::cerr << "[CacheNode]  Failed to set socket to non-blocking mode." << std::endl;
         close(server_socket); // Clean up the socket if the operation failed
     }
-
+    
     std::thread acceptThread([this, kq_accept,server_socket,kq_client] {
     accept_connections(kq_accept, this,server_socket,kq_client,this->wakeup_pipe);
 });

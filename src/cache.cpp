@@ -318,37 +318,12 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
         return routeSetRequest(request);
     }
 
-void Cache::handleClientWorker(int kq, struct kevent &event) {
-    while (!this->stopServer.load()) {
-        int client_fd;
-
-        // std::stringstream ss;
-        // ss << std::this_thread::get_id();
-        // std::string thread_id = ss.str();
-
-        // Wait for a client connection to process
-        {
-            std::unique_lock<std::mutex> lock(queue_mutex);
-            queue_cv.wait(lock, [this] { return !client_queue.empty() || this->stopServer.load(); });
-            if (this->stopServer.load()) {
-                return; // Exit the worker thread gracefully
-            }
-            if (!client_queue.empty() && !this->stopServer.load()) {
-                client_fd = client_queue.front();
-                client_queue.pop();
-            }
-        }
-        // Handle the client
-        handle_client(client_fd);
-    }
-}
     void Cache::shutDownCacheServer(){
         this->stopServer.store(true);
         char wakeup_signal = 1;  // Any data will do
         if (write(wakeup_pipe[1], &wakeup_signal, sizeof(wakeup_signal)) == -1) {
         std::cerr << "[Cache] Failed to write to wakeup pipe: " << strerror(errno) << std::endl;
     }
-        queue_cv.notify_all();
     }
     
 bool Cache::isServerStopped() const {
@@ -356,15 +331,6 @@ bool Cache::isServerStopped() const {
     }
     void Cache::handleClient(int new_socket) {
         handle_client(new_socket);
-    }
-    std::queue<int>& Cache::getClientQueue(){
-        return client_queue;
-    }
-    std::mutex& Cache::getQueueMutex(){
-        return queue_mutex;
-    }
-    std::condition_variable& Cache::getQueueConditionVariable(){
-        return queue_cv;
     }
 
 
@@ -480,17 +446,6 @@ void handle_client_connections(int kq, Cache* cache,int server_fd,int wakeup_pip
                 // Remove client socket from kqueue
                 EV_SET(&event, client_fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
                 kevent(kq, &event, 1, NULL, 0, NULL);
-
-                  // Data ready to read on a client socket
-                // int client_fd = events[i].ident;
-                // {
-                //     std::lock_guard<std::mutex> lock(cache->getQueueMutex());
-                //     cache->getClientQueue().push(client_fd);
-                //     // Remove client socket from kqueue
-                //     EV_SET(&event, client_fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-                //     kevent(kq, &event, 1, NULL, 0, NULL);
-                // }
-                // cache->getQueueConditionVariable().notify_all();
             }
             }
     }

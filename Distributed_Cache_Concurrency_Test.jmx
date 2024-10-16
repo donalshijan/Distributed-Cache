@@ -219,7 +219,7 @@ def setKeys(String ip, int port, Map&lt;String, String&gt; keyValuePairs) {
 // Configuration (you can parameterize these with JMeter variables)
 def ip = vars.get(&quot;cache_server_ip&quot;) // Cache server IP
 def port = vars.get(&quot;cache_server_port&quot;).toInteger()     // Cache server port
-def basePairs = 50   // Start with 50 key-value pairs
+def basePairs = 2000   // Start with 50 key-value pairs
 
 
 // Initialize valid response counter
@@ -269,7 +269,7 @@ log.info(&quot;Test completed.&quot;)
           <stringProp name="scriptLanguage">groovy</stringProp>
         </JSR223Sampler>
         <hashTree/>
-        <ResultCollector guiclass="StatVisualizer" testclass="ResultCollector" testname="Aggregate Report" enabled="true">
+        <ResultCollector guiclass="StatVisualizer" testclass="ResultCollector" testname="Aggregate Report">
           <boolProp name="ResultCollector.error_logging">false</boolProp>
           <objProp>
             <name>saveConfig</name>
@@ -343,7 +343,7 @@ log.info(&quot;Test completed.&quot;)
           <stringProp name="filename">/Users/donalshijan/Workspace/PersonalProjects/Distributed_Cache/JmeterConcurrencyTestFiles/testResults.jtl</stringProp>
         </ResultCollector>
         <hashTree/>
-        <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="JSR223 PreProcessor" enabled="true">
+        <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="JSR223 PreProcessor">
           <stringProp name="cacheKey">true</stringProp>
           <stringProp name="filename"></stringProp>
           <stringProp name="parameters"></stringProp>
@@ -366,7 +366,7 @@ if (resultFile.exists()) {
         </JSR223PreProcessor>
         <hashTree/>
       </hashTree>
-      <Arguments guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
+      <Arguments guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables">
         <collectionProp name="Arguments.arguments">
           <elementProp name="cache_server_ip" elementType="Argument">
             <stringProp name="Argument.name">cache_server_ip</stringProp>
@@ -415,10 +415,10 @@ if (resultFile.exists()) {
             <connectTime>true</connectTime>
           </value>
         </objProp>
-        <stringProp name="filename"></stringProp>
+        <stringProp name="filename">/Users/donalshijan/Workspace/PersonalProjects/Distributed_Cache/JmeterConcurrencyTestFiles/testResults.jtl</stringProp>
       </ResultCollector>
       <hashTree/>
-      <ResultCollector guiclass="SummaryReport" testclass="ResultCollector" testname="Summary Report" enabled="true">
+      <ResultCollector guiclass="SummaryReport" testclass="ResultCollector" testname="Summary Report">
         <boolProp name="ResultCollector.error_logging">false</boolProp>
         <objProp>
           <name>saveConfig</name>
@@ -452,7 +452,7 @@ if (resultFile.exists()) {
             <connectTime>true</connectTime>
           </value>
         </objProp>
-        <stringProp name="filename"></stringProp>
+        <stringProp name="filename">/Users/donalshijan/Workspace/PersonalProjects/Distributed_Cache/JmeterConcurrencyTestFiles/testResults.jtl</stringProp>
       </ResultCollector>
       <hashTree/>
       <ResultCollector guiclass="StatVisualizer" testclass="ResultCollector" testname="Aggregate Report" enabled="true">
@@ -489,7 +489,7 @@ if (resultFile.exists()) {
             <connectTime>true</connectTime>
           </value>
         </objProp>
-        <stringProp name="filename"></stringProp>
+        <stringProp name="filename">/Users/donalshijan/Workspace/PersonalProjects/Distributed_Cache/JmeterConcurrencyTestFiles/testResults.jtl</stringProp>
       </ResultCollector>
       <hashTree/>
       <ResultCollector guiclass="GraphVisualizer" testclass="ResultCollector" testname="Graph Results" enabled="true">
@@ -526,7 +526,7 @@ if (resultFile.exists()) {
             <connectTime>true</connectTime>
           </value>
         </objProp>
-        <stringProp name="filename"></stringProp>
+        <stringProp name="filename">/Users/donalshijan/Workspace/PersonalProjects/Distributed_Cache/JmeterConcurrencyTestFiles/testResults.jtl</stringProp>
       </ResultCollector>
       <hashTree/>
       <ResultCollector guiclass="RespTimeGraphVisualizer" testclass="ResultCollector" testname="Response Time Graph" enabled="true">
