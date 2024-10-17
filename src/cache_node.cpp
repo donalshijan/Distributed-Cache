@@ -637,10 +637,9 @@ void handle_client_connections(int kq, CacheNode* cache_node,int server_fd,int w
     struct timespec timeout;
     timeout.tv_sec = 1;  // 1 second timeout
     timeout.tv_nsec = 0;
+    struct kevent event;
+    struct kevent events[10];
     while (!cache_node->isServerStopped()) {
-
-        struct kevent event;
-        struct kevent events[10];
         int nev = kevent(kq, NULL, 0, events, 10, NULL);  // Wait for read events
         if (nev == -1) {
             std::cerr << "[CacheNode] Error with kevent (client event loop): " << strerror(errno) << std::endl;
@@ -653,32 +652,32 @@ void handle_client_connections(int kq, CacheNode* cache_node,int server_fd,int w
                 }
         }
         if (nev > 0) {
-            if (event.ident == wakeup_pipe[0]) {
-                // Received wakeup signal, break out of loop
-                std::cout << "[CacheNode] Wakeup signal received, shutting down accept loop." << std::endl;
-                break;
+            for (int i = 0; i < nev; i++) {
+                if (cache_node->isServerStopped())
+                { 
+                    break;
+                }
+                if (events[i].ident == wakeup_pipe[0]) {
+                    // Received wakeup signal, break out of loop
+                    std::cout << "[CacheNode] Wakeup signal received, shutting down accept loop." << std::endl;
+                    break;
+                }
+                if (events[i].flags & EV_ERROR) {
+                    std::cerr << "[CacheNode] Kqueue error on fd: " << events[i].ident << std::endl;
+                    continue;
+                }
+
+                // Check if the event is a read event (EVFILT_READ) for the client socket
+                if (events[i].filter == EVFILT_READ && events[i].ident!=server_fd) {
+                    int client_fd = events[i].ident;
+                    cache_node->handleClient(client_fd);
+                    std::cout << "[CacheNode] Client connection closed." << std::endl;
+                    // Remove client socket from kqueue
+                    EV_SET(&event, client_fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+                    kevent(kq, &event, 1, NULL, 0, NULL);
+                }
             }
         }
-        for (int i = 0; i < nev; i++) {
-            if (cache_node->isServerStopped())
-            { 
-                break;
-            }
-            if (events[i].flags & EV_ERROR) {
-                std::cerr << "[CacheNode] Kqueue error on fd: " << events[i].ident << std::endl;
-                continue;
-            }
-
-            // Check if the event is a read event (EVFILT_READ) for the client socket
-            if (events[i].filter == EVFILT_READ && events[i].ident!=server_fd) {
-                int client_fd = events[i].ident;
-                cache_node->handleClient(client_fd);
-                std::cout << "[CacheNode] Client connection closed." << std::endl;
-                // Remove client socket from kqueue
-                EV_SET(&event, client_fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-                kevent(kq, &event, 1, NULL, 0, NULL);
-            }
-            }
     }
 }
 
