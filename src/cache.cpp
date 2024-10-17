@@ -352,19 +352,43 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
     }
     std::cout<<"[Cache] Cluster Manager is Active for Cluster ID: "<<this->cluster_id_<<std::endl;
     std::cout << "[Cache] Cache server started and listening on " << ip_ << ":" << port_ << std::endl;
+    fd_set readfds;
+    struct timeval timeout;
+    timeout.tv_sec = 1;  // Set a 1-second timeout
+    timeout.tv_usec = 0;
     while (!this->stopServer.load()) {
-        // Accept incoming connections
-        if ((new_socket = accept(server_fd, (struct sockaddr*)&address, (socklen_t*)&addrlen)) >= 0) {
+        FD_ZERO(&readfds);
+        FD_SET(server_fd, &readfds);  // Add the server socket to the set
+
+        // Wait for activity on the server socket, timeout after 1 second
+        int activity = select(server_fd + 1, &readfds, NULL, NULL, &timeout);
+
+        if (activity < 0 && errno != EINTR) {
+            std::cerr << "[Cache] select error: " << strerror(errno) << std::endl;
+            break;
+        }
+        // Check if there's a new connection to accept
+        if (FD_ISSET(server_fd, &readfds)) {
+            int new_socket = accept(server_fd, (struct sockaddr*)&address, (socklen_t*)&addrlen);
+            if (new_socket < 0) {
+                std::cerr << "[Cache] Failed to accept connection: " << strerror(errno) << std::endl;
+                continue;
+            }
             handle_client(new_socket);
         }
-        else if (errno != EWOULDBLOCK && errno != EAGAIN) {
-            // Handle other errors
-            std::cerr << "[Cache] Error on accept: " << strerror(errno) << std::endl;
-        }
-        else{
-            // std::cerr << "Failed to accept connection." << std::endl;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));  // Add small sleep to avoid busy loop
+        // // Accept incoming connections
+        // if ((new_socket = accept(server_fd, (struct sockaddr*)&address, (socklen_t*)&addrlen)) >= 0) {
+        //     handle_client(new_socket);  // Handle the client in a try-catch block
+        
+        // }
+        // else if (errno != EWOULDBLOCK && errno != EAGAIN) {
+        //     // Handle other errors
+        //     std::cerr << "[Cache] Error on accept: " << strerror(errno) << std::endl;
+        // }
+        // else{
+        //     // std::cerr << "Failed to accept connection." << std::endl;
+        // }
+        // std::this_thread::sleep_for(std::chrono::milliseconds(1));  // Add small sleep to avoid busy loop
     }
     close(server_fd);  // Close server socket   
     std::cout<<"[Cache] Cache Server Shutting down..."<<std::endl;
@@ -372,17 +396,39 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
 
 void Cache::handle_client(int new_socket){
     // Receive the client's request
-        char buffer[1024] = {0};
+       char buffer[1024] = {0};
+    int retries = 1000;
+    // int valread;
+    while (retries > 0) {
         int valread = read(new_socket, buffer, 1024);
-        if (valread < 0) {
-            std::cerr << "[Cache] Failed to read from socket." << std::endl;
+        if (valread > 0) {
+            // Process the data
+            break;
+        } else if (valread == 0) {
+            // Connection closed
+            std::cerr << "[Cache] Client disconnected." << std::endl;
             close(new_socket);
             return;
+        } else {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Socket temporarily unavailable, retry
+                retries--;
+                continue;
+            } else {
+                std::cerr << "[Cache] Failed to read from socket: " << strerror(errno) << std::endl;
+                close(new_socket);
+                return;
+            }
         }
+    }
+    if (retries == 0) {
+        std::cerr << "[Cache] Read failed after multiple attempts." << std::endl;
+        close(new_socket);
+    }
 
-        std::string request(buffer, valread);
+        std::string request(buffer);
         std::string response;
-        // std::cout<<request;
+        // std::cout<<"Request:"<<request<<std::endl;
         size_t pos = 0;
         pos = request.find("\r\n");
 
@@ -399,9 +445,6 @@ void Cache::handle_client(int new_socket){
             return;
         }
         if (request.substr(pos, 3) == "GET") {
-            // Extract key from request
-            // size_t key_start = request.find("\r\n", 4) + 2;
-            // std::string key = request.substr(key_start, request.find("\r\n", key_start) - key_start);
             
             try {
                 response = routeGetRequest(request);
@@ -410,12 +453,6 @@ void Cache::handle_client(int new_socket){
             }
 
         } else if (request.substr(pos, 3) == "SET") {
-            // Extract key and value from request
-            // size_t key_start = request.find("\r\n", 4) + 2;
-            // std::string key = request.substr(key_start, request.find("\r\n", key_start) - key_start);
-
-            // size_t value_start = request.find("\r\n", key_start) + 2;
-            // std::string value = request.substr(value_start, request.find("\r\n", value_start) - value_start);
 
             std::string result = routeSetRequest(request);
             if (result == "Failed:No nodes available to route request.") {

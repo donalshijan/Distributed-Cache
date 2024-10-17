@@ -233,13 +233,35 @@ void CacheNode::assignToCluster(const std::string& cluster_id, std::string& clus
 
 
 void CacheNode::handle_client(int client_socket) {
-    char buffer[1024];
-    ssize_t bytes_read = read(client_socket, buffer, sizeof(buffer) - 1);
-    if (bytes_read <= 0) {
-        close(client_socket);
-        return;
+    char buffer[1024] = {0};
+    int retries = 1000;
+    while (retries > 0) {
+        int valread = read(client_socket, buffer, 1024);
+        if (valread > 0) {
+            // Process the data
+            buffer[valread]='\0';
+            break;
+        } else if (valread == 0) {
+            // Connection closed
+            std::cerr << "[Cache] Client disconnected." << std::endl;
+            close(client_socket);
+            return;
+        } else {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Socket temporarily unavailable, retry
+                retries--;
+                continue;
+            } else {
+                std::cerr << "[Cache] Failed to read from socket: " << strerror(errno) << std::endl;
+                close(client_socket);
+                return;
+            }
+        }
     }
-    buffer[bytes_read] = '\0';
+    if (retries == 0) {
+        std::cerr << "[Cache] Read failed after multiple attempts." << std::endl;
+        close(client_socket);
+    }
     
     std::string request(buffer);
     std::string response;
@@ -610,15 +632,38 @@ void CacheNode::start_node_server() {
         close(server_socket); // Clean up the socket if the operation failed
     }
     std::cout << "[CacheNode] Cache Node Server is running on  "<<this->ip_<<":"<< this->port_ << std::endl;
+    fd_set readfds;
+    struct timeval timeout;
+    timeout.tv_sec = 1;  // Set a 1-second timeout
+    timeout.tv_usec = 0;
     while (!this->stopServer.load()) {
-        int client_socket = accept(server_socket, nullptr, nullptr);
-        if (client_socket >= 0) {
-            handle_client(client_socket);
-        } else if (errno != EWOULDBLOCK && errno != EAGAIN) {
-            // Handle other errors
-            std::cerr << "[CacheNode]  Error on accept: " << strerror(errno) << std::endl;
+        FD_ZERO(&readfds);
+        FD_SET(server_socket, &readfds);  // Add the server socket to the set
+
+        // Wait for activity on the server socket, timeout after 1 second
+        int activity = select(server_socket + 1, &readfds, NULL, NULL, &timeout);
+
+        if (activity < 0 && errno != EINTR) {
+            std::cerr << "[Cache] select error: " << strerror(errno) << std::endl;
+            break;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));  // Add small sleep to avoid busy loop
+        // Check if there's a new connection to accept
+        if (FD_ISSET(server_socket, &readfds)) {
+            int new_socket = accept(server_socket, (struct sockaddr*)&server_addr, (socklen_t*)&server_addr);
+            if (new_socket < 0) {
+                std::cerr << "[Cache] Failed to accept connection: " << strerror(errno) << std::endl;
+                continue;
+            }
+            handle_client(new_socket);
+        }
+        // int client_socket = accept(server_socket, nullptr, nullptr);
+        // if (client_socket >= 0) {
+        //     handle_client(client_socket);
+        // } else if (errno != EWOULDBLOCK && errno != EAGAIN) {
+        //     // Handle other errors
+        //     std::cerr << "[CacheNode]  Error on accept: " << strerror(errno) << std::endl;
+        // }
+        // std::this_thread::sleep_for(std::chrono::milliseconds(1));  // Add small sleep to avoid busy loop
     }
 
     close(server_socket);
