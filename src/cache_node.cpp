@@ -241,6 +241,7 @@ void CacheNode::handle_client(int client_socket) {
     }
     buffer[bytes_read] = '\0';
     
+    
     std::string request(buffer);
     std::string response;
 

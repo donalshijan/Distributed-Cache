@@ -570,7 +570,7 @@ EV_SET(&event, wakeup_pipe[0], EVFILT_READ, EV_ADD, 0, 0, NULL);
 
 
 void Cache::handle_client(int new_socket){
-    // Receive the client's request
+        // Receive the client's request
         char buffer[1024] = {0};
         int valread = read(new_socket, buffer, 1024);
         if (valread < 0) {
@@ -579,9 +579,9 @@ void Cache::handle_client(int new_socket){
             return;
         }
 
-        std::string request(buffer, valread);
+        std::string request(buffer,valread);
         std::string response;
-        // std::cout<<request;
+        // std::cout<<"Request:"<<request<<std::endl;
         size_t pos = 0;
         pos = request.find("\r\n");
 
