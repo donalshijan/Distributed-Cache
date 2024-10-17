@@ -217,7 +217,7 @@ def setKeys(String ip, int port, Map&lt;String, String&gt; keyValuePairs) {
 // Configuration (you can parameterize these with JMeter variables)
 def ip = vars.get(&quot;cache_server_ip&quot;) // Cache server IP
 def port = vars.get(&quot;cache_server_port&quot;).toInteger()     // Cache server port
-def basePairs = 50   // Start with 50 key-value pairs
+def basePairs = 2000   // Start with 50 key-value pairs
 
 
 // Initialize valid response counter
