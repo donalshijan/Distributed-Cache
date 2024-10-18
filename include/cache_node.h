@@ -17,6 +17,8 @@
 #include <future>
 #include <atomic>
 #include <sstream>
+#include <sys/event.h> 
+#include <condition_variable>
 
 #define DEFAULT_CACHE_NODE_PORT 8069
 
@@ -48,9 +50,18 @@ public:
     
     void startCacheServer();
     void shutDownCacheServer();
-    std::string getPublicIp();
+    bool isServerStopped() const;
+    void handleClient(int new_socket); 
+    // std::string getPublicIp();
 
 private:
+    std::queue<std::tuple<int, std::string>> get_queue;
+    std::queue<std::tuple<int, std::string>> set_queue;
+    std::mutex get_mutex;
+    std::mutex set_mutex;
+    std::condition_variable get_cv;
+    std::condition_variable set_cv;
+    int wakeup_pipe[2]; // Create a pipe for waking up the kqueue
     std::vector<NodeConnectionDetails> nodes_;
     size_t next_node_ = 0;
     std::hash<std::string> hasher_;
@@ -63,6 +74,8 @@ private:
     // Helper function to send data over TCP/IP
     std::string sendToNode(const std::string& ip, int port, const std::string& request);
     void handle_client(int new_socket);
+    void get_handler();
+    void set_handler();
 };
 
 enum EvictionStrategy {
@@ -93,6 +106,8 @@ public:
     void start_node_server();
     void shutDown_node_server();
     std::future<void> remove_future_;
+    bool isServerStopped() const;
+    void handleClient(int new_socket);
 
 private:
     struct LFUComparator {
@@ -104,6 +119,7 @@ private:
     std::string node_id_;
     int port_;
     std::string ip_;
+    int wakeup_pipe[2];
     // Internal data storage
     std::unordered_map<std::string, std::pair<std::string, std::chrono::steady_clock::time_point>> store_;
     // For LFU

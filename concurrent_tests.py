@@ -129,7 +129,7 @@ if __name__ == "__main__":
         progress_thread_set = threading.Thread(target=progress_bar_set.display)
         
         
-        print("Starting SET requests...")
+        print(f"Starting SET requests to set {base_pairs} keys ...")
         progress_thread_set.start()
         set_keys(cache_server_ip, cache_server_port, key_value_pairs,progress_bar_set)  # Setting keys in cache
         
