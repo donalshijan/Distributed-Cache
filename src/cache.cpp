@@ -17,10 +17,19 @@
 #include <thread>
 #include <functional>
 #include <sstream>
+#include <signal.h>
+#include <sys/wait.h>
+#include <mach/mach.h>
+#include <mach/thread_policy.h>
+#include <stdio.h>
+#include <pthread.h>
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#include <netinet/tcp.h>
+#include "connection_pool.h"
 
 
-
-Cache::Cache(const std::string& ip, const int& port) : ip_(ip), port_(port) {
+Cache::Cache(const std::string& ip, const int& port) : ip_(ip), port_(port), connection_pool(){
         boost::uuids::uuid uuid = boost::uuids::random_generator()();
         cluster_id_ = boost::uuids::to_string(uuid);
     }
@@ -37,54 +46,56 @@ size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* use
     return fcntl(socket, F_SETFL, flags | O_NONBLOCK);
 }
 
-// std::string Cache::getPublicIp() {
-//     CURL* curl;
-//     CURLcode res;
-//     std::string readBuffer;
-
-//     curl = curl_easy_init();
-//     if(curl) {
-//         // Use an external service to get the public IP
-//         curl_easy_setopt(curl, CURLOPT_URL, "https://ifconfig.me");
-//         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-//         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
-
-//         res = curl_easy_perform(curl);
-//         if(res != CURLE_OK) {
-//             std::cerr << "Failed to fetch public IP: " << curl_easy_strerror(res) << std::endl;
-//         }
-//         curl_easy_cleanup(curl);
-//     }
-
-//     // Return the public IP address as a string
-//     return readBuffer;
-// }
-
 std::string Cache::getClusterId() const {
     return this->cluster_id_;
 }
 
         // Helper function to send data over TCP/IP
-std::string Cache::sendToNode(const std::string& ip, int port, const std::string& request) {
-        int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-        if (sockfd < 0) {
-            throw std::runtime_error("Socket creation failed.");
+std::string Cache::sendToNode(const std::string& node_id,  const std::string& request) {
+        int sockfd;
+        try {
+            // Attempt to get an existing connection
+            sockfd = connection_pool.getConnection(node_id);
+
+            // Check if the connection is still alive
+            char buffer;
+            int alive_check = recv(sockfd, &buffer, sizeof(buffer), MSG_PEEK | MSG_DONTWAIT);
+
+            if (alive_check == 0 || (alive_check < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+                // Connection is closed or in an error state, remove it from pool
+                connection_pool.removeConnection(node_id);
+
+                // Find node details
+                auto nodeDetails = std::find_if(nodes_.begin(), nodes_.end(),
+                                                [&node_id](const NodeConnectionDetails& node) {
+                                                    return node.node_id == node_id;
+                                                });
+
+                // Add a new connection to the pool
+                connection_pool.addConnection(*nodeDetails);
+                sockfd = connection_pool.getConnection(node_id);  // Retrieve the new connection
+            }
+        } catch (const std::runtime_error& e) {
+            // If connection does not exist, create it and add to pool
+            auto nodeDetails = std::find_if(nodes_.begin(), nodes_.end(),[&node_id](const NodeConnectionDetails& node) {return node.node_id == node_id;});
+            connection_pool.addConnection(*nodeDetails);  // Add new connection to the pool
+            sockfd = connection_pool.getConnection(node_id);  // Retrieve the new connection
         }
 
         // setNonBlockingSocket(sockfd);
 
-        sockaddr_in serv_addr;
-        serv_addr.sin_family = AF_INET;
-        serv_addr.sin_port = htons(port);
-        if (inet_pton(AF_INET, ip.c_str(), &serv_addr.sin_addr) <= 0) {
-            close(sockfd);
-            throw std::runtime_error("Invalid address/Address not supported.");
-        }
+        // sockaddr_in serv_addr;
+        // serv_addr.sin_family = AF_INET;
+        // serv_addr.sin_port = htons(port);
+        // if (inet_pton(AF_INET, ip.c_str(), &serv_addr.sin_addr) <= 0) {
+        //     close(sockfd);
+        //     throw std::runtime_error("Invalid address/Address not supported.");
+        // }
 
-        if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-            close(sockfd);
-            throw std::runtime_error("Connection failed.");
-        }
+        // if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        //     close(sockfd);
+        //     throw std::runtime_error("Connection failed.");
+        // }
         // // Wait for the socket to be writable (i.e., connection established)
         // fd_set write_fds;
         // FD_ZERO(&write_fds);
@@ -122,10 +133,10 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
         char buffer[1024] = {0};
         int bytes_received = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
         if (bytes_received < 0) {
-            close(sockfd);
+            // close(sockfd);
             throw std::runtime_error("Failed to receive response.");
         }
-        close(sockfd);
+        // close(sockfd);
         return std::string(buffer, bytes_received);
     }
 
@@ -208,7 +219,7 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
             // Send the MIGRATE message to the node with node_id
             try {
                 // Call the sendToNode method and store the return message.
-                std::string response = sendToNode(it->ip, it->port, migrate_message.str());
+                std::string response = sendToNode(it->node_id, migrate_message.str());
 
                 // Process the response if no exception was thrown.
                 std::cout << "[Cache] Migrate Message sent successfully. Response: " << response << std::endl;
@@ -232,7 +243,7 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
         for (const auto& node : nodes_) {
                 std::string response; 
                 try{
-                    response=sendToNode(node.ip, node.port, request);
+                    response=sendToNode(node.node_id, request);
                 }catch (const std::runtime_error& e) {
                     std::cerr << "[Cache] Error: " << e.what() << std::endl;
                     return std::string("Error: ") + e.what();
@@ -263,7 +274,7 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
                 // Valid node, proceed with sending request
                 std::string response;
                 try{
-                    response=sendToNode(node.ip, node.port, request);
+                    response=sendToNode(node.node_id, request);
                 }catch (const std::runtime_error& e) {
                     std::cerr << "[Cache] Error: " << e.what() << std::endl;
                     return std::string("Error: ") + e.what();
@@ -322,8 +333,8 @@ std::string Cache::sendToNode(const std::string& ip, int port, const std::string
         this->stopServer.store(true);
         char wakeup_signal = 1;  // Any data will do
         if (write(wakeup_pipe[1], &wakeup_signal, sizeof(wakeup_signal)) == -1) {
-        std::cerr << "[Cache] Failed to write to wakeup pipe: " << strerror(errno) << std::endl;
-    }
+            std::cerr << "[Cache] Failed to write to wakeup pipe: " << strerror(errno) << std::endl;
+        }
     }
     
 bool Cache::isServerStopped() const {
@@ -334,81 +345,112 @@ bool Cache::isServerStopped() const {
     }
 
 
+void send_fd(int unix_socket, int fd_to_send) {
+    struct msghdr msg = {0};
+    char buf[CMSG_SPACE(sizeof(fd_to_send))];
+    memset(buf, 0, sizeof(buf));
 
-void accept_connections(int kq, Cache* cache,int server_fd,int kq_client,int wakeup_pipe[2]) {
-        struct timespec timeout;
-        timeout.tv_sec = 1;  // 1 second timeout
-        timeout.tv_nsec = 0;
+    struct iovec io = { .iov_base = (void*) "FD", .iov_len = 2 };
+    msg.msg_iov = &io;
+    msg.msg_iovlen = 1;
+
+    struct cmsghdr *cmsg = (struct cmsghdr *) buf;
+    msg.msg_control = cmsg;
+    msg.msg_controllen = CMSG_LEN(sizeof(fd_to_send));
+
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(fd_to_send));
+
+    *((int *) CMSG_DATA(cmsg)) = fd_to_send;
+
+    if (sendmsg(unix_socket, &msg, 0) < 0) {
+        throw std::runtime_error("Failed to send file descriptor");
+    }
+}
+
+int recv_fd(int unix_socket) {
+    struct msghdr msg = {0};
+    char m_buffer[256];
+    struct iovec io = { .iov_base = m_buffer, .iov_len = sizeof(m_buffer) };
+
+    char cmsg_buf[CMSG_SPACE(sizeof(int))];
+    msg.msg_iov = &io;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cmsg_buf;
+    msg.msg_controllen = sizeof(cmsg_buf);
+
+    if (recvmsg(unix_socket, &msg, 0) < 0) {
+        throw std::runtime_error("Failed to receive file descriptor");
+    }
+
+    struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
+    if (cmsg && cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
+        int fd;
+        std::memcpy(&fd, CMSG_DATA(cmsg), sizeof(fd));
+        return fd;  // Return the received FD
+    }
+
+    return -1;
+}
+
+void accept_connections(Cache* cache, int kq_client, std::vector<int> unix_sockets) {
+    struct timespec timeout;
+    timeout.tv_sec = 1;  // 1 second timeout
+    timeout.tv_nsec = 0;
+    struct kevent event;
+
     while (!cache->isServerStopped()) {
+        fd_set readfds;
+        struct timeval timeout;
 
-        struct kevent event;
-        int nev = kevent(kq, NULL, 0, &event, 1, NULL);  // Wait for a connection event
-        // std::cout << "[Cache] accept thread kevent returned with nev = " << nev << std::endl;
-        if (nev == -1) {
-            std::cerr << "[Cache] Error with kevent (accept loop): " << strerror(errno) << std::endl;
-            break;
-        }
+        timeout.tv_sec = 1;  // 1 second timeout
+        timeout.tv_usec = 0;
 
-        if (nev == 0) {
-           
-            // No events, check if stopServer is set
-            if (cache->isServerStopped())
-            {  
-                break;
-                }
+        FD_ZERO(&readfds);
 
-        }
-         if (nev > 0) {
-            if (event.ident == wakeup_pipe[0]) {
-                // Received wakeup signal, break out of loop
-                std::cout << "[Cache] Wakeup signal received, shutting down accept loop." << std::endl;
-                break;
+        // Add each socket in unix_sockets to the readfds set
+        int max_fd = -1;
+        for (int unix_socket : unix_sockets) {
+            FD_SET(unix_socket, &readfds);
+            if (unix_socket > max_fd) {
+                max_fd = unix_socket;
             }
         }
 
-        if (event.flags & EV_ERROR) {
-                std::cerr << "[Cache] Kqueue error on fd: " << event.ident << std::endl;
-                continue;
-            }
-        if (event.ident == server_fd ) {
-            // New connection ready to accept
-            int new_socket;
-            struct sockaddr_in address;
-            socklen_t addrlen = sizeof(address);
-            
-            while ((new_socket = accept(server_fd, (struct sockaddr*)&address, &addrlen)) >= 0) {
-                if (cache->isServerStopped())
-                { 
-                    break;
-                }
-                if (setNonBlockingSocket(new_socket) == -1) {
-                    std::cerr << "[Cache] Failed to set client socket to non-blocking mode." << std::endl;
-                    close(new_socket);
-                } else {
-                    std::cout << "[Cache] New connection accepted." << std::endl;
+        // Wait for any socket to be ready for reading
+        int activity = select(max_fd + 1, &readfds, NULL, NULL, &timeout);
 
-                    // Register the new socket for read events
-                    EV_SET(&event, new_socket, EVFILT_READ, EV_ADD, 0, 0, NULL);
-                    if (kevent(kq_client, &event, 1, NULL, 0, NULL) == -1) {
-                        std::cerr << "[Cache] Failed to register new_socket with kqueue." << std::endl;
-                        close(new_socket);
+        if (activity > 0) {
+            // Iterate over each socket to check if it’s ready
+            for (int unix_socket : unix_sockets) {
+                if (FD_ISSET(unix_socket, &readfds)) {
+                    // Receive a new connection from the listener process
+                    int new_socket = recv_fd(unix_socket);
+                    if (new_socket != -1) {
+                        EV_SET(&event, new_socket, EVFILT_READ, EV_ADD | EV_CLEAR | EV_ENABLE, 0, 0, NULL);
+                        if (kevent(kq_client, &event, 1, NULL, 0, NULL) == -1) {
+                            std::cerr << "[Cache] Failed to register new_socket with kqueue." << std::endl;
+                            close(new_socket);
+                        } else {
+                            std::cout << "[Cache] New connection accepted." << std::endl;
+                        }
                     }
                 }
-            }
-            if (errno != EWOULDBLOCK && errno != EAGAIN) {
-                std::cerr << "[Cache] Error on accept: " << strerror(errno) << std::endl;
             }
         }
     }
 }
 
-void handle_client_connections(int kq, Cache* cache,int server_fd,int wakeup_pipe[2]) {
+
+void handle_client_connections(int kq, Cache* cache,int wakeup_pipe[2]) {
     struct timespec timeout;
     timeout.tv_sec = 1;  // 1 second timeout
     timeout.tv_nsec = 0;
     struct kevent event;
     struct kevent events[10];
     while (!cache->isServerStopped()) {
+        // std::cout << "[Cache] handle connections running "<< "Process ID: " << getpid() << ", Thread ID: " << std::this_thread::get_id() << std::endl;
         int nev = kevent(kq, NULL, 0, events, 10, NULL);  // Wait for read events
         if (nev == -1) {
             std::cerr << "[Cache] Error with kevent (client event loop): " << strerror(errno) << std::endl;
@@ -437,13 +479,15 @@ void handle_client_connections(int kq, Cache* cache,int server_fd,int wakeup_pip
                 }
 
                 // Check if the event is a read event (EVFILT_READ) for the client socket
-                if (events[i].filter == EVFILT_READ && events[i].ident!=server_fd) {
+                if (events[i].filter == EVFILT_READ) {
                     int client_fd = events[i].ident;
                     cache->handleClient(client_fd);
+                    #ifdef PRODUCTION
                     std::cout << "[Cache] Client connection closed." << std::endl;
                     // Remove client socket from kqueue
                     EV_SET(&event, client_fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
                     kevent(kq, &event, 1, NULL, 0, NULL);
+                    #endif
                 }
             }
         }
@@ -451,80 +495,265 @@ void handle_client_connections(int kq, Cache* cache,int server_fd,int wakeup_pip
     }
 }
 
-void Cache::startCacheServer() {
-    this->stopServer.store(false);
-    int server_fd, new_socket;
+// Global variable to track child processes
+static std::vector<pid_t> child_pids;
+
+// Signal handler to terminate child processes
+static void handle_signal(int sig) {
+    std::cerr << "[Cache] Received signal " << sig << ", shutting down..." << std::endl;
+    
+    // Terminate all child processes
+    for (pid_t pid : child_pids) {
+        if (pid > 0) {
+            kill(pid, SIGTERM);  // Send SIGTERM to each child process
+        }
+    }
+    
+    // Exit after terminating children
+    exit(0);
+}
+
+int get_core_count() {
+    int count;
+    size_t len = sizeof(count);
+     if (sysctlbyname("hw.logicalcpu", &count, &len, NULL, 0) != 0) {
+        perror("sysctlbyname failed");
+        return -1;
+    }
+    return count;
+}
+
+void set_affinity(int core_id) {
+    // Get the number of CPU cores and ensure core_id is valid
+    int core_count = get_core_count();
+    if (core_id < 0 || core_id >= core_count) {
+        fprintf(stderr, "Invalid core_id: %d. Must be between 0 and %d.\n", core_id, core_count - 1);
+        return;
+    }
+    
+    thread_affinity_policy_data_t policy = { core_id };
+    thread_port_t thread = pthread_mach_thread_np(pthread_self());
+
+    kern_return_t result = thread_policy_set(thread, THREAD_AFFINITY_POLICY,(thread_policy_t)&policy, 1);
+    if (result != KERN_SUCCESS) {
+        fprintf(stderr, "Error setting thread affinity: %d\n", result);
+    } else {
+        printf("Thread affinity set to core %d\n", core_id);
+    }
+}
+
+int setup_listener(std::string ip, int port){
+    int listener_fd;
     struct sockaddr_in address;
     int opt = 1;
     int addrlen = sizeof(address);
 
     // Create a socket
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+    if ((listener_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
         throw std::runtime_error("Socket creation failed.");
     }
 
     // Allow the port to be reused
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
-        close(server_fd);
+    if (setsockopt(listener_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+        close(listener_fd);
         throw std::runtime_error("Failed to set SO_REUSEADDR.");
     }
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt))) {
-        close(server_fd);
+    if (setsockopt(listener_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt))) {
+        close(listener_fd);
         throw std::runtime_error("Failed to set SO_REUSEPORT.");
     }
 
     // Bind the socket to the IP and port
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = inet_addr(ip_.c_str());  // Bind to the IP provided
-    address.sin_port = htons(port_);
+    address.sin_addr.s_addr = inet_addr(ip.c_str());  // Bind to the IP provided
+    address.sin_port = htons(port);
 
-    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        close(server_fd);
+    if (bind(listener_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
+        close(listener_fd);
         throw std::runtime_error("Failed to bind socket.");
     }
 
     // Start listening for incoming connections
-    if (listen(server_fd, 3) < 0) {
-        close(server_fd);
+    if (listen(listener_fd, 3) < 0) {
+        close(listener_fd);
         throw std::runtime_error("Listen failed.");
     }
 
     // Set server socket to non-blocking mode
-    if (setNonBlockingSocket(server_fd) == -1) {
+    if (setNonBlockingSocket(listener_fd) == -1) {
         std::cerr << "[Cache] Failed to set socket to non-blocking mode." << std::endl;
-        close(server_fd);
+        close(listener_fd);
+        return -1;
+    }
+    return listener_fd;
+}
+
+void listener_process(int unix_socket, std::string ip, int port, int core_id) {
+
+    set_affinity(core_id);
+    // Set up socket, bind, listen, accept, etc.
+    int listener_fd = setup_listener(ip,port);
+    struct sockaddr_in address;
+    socklen_t addrlen = sizeof(address);
+    if( listener_fd==-1){
+        throw std::runtime_error("[Cache] Listener setup failed");
+    }
+    std::cout<<"[Cache] listener starting..."<<std::endl;
+    while (true) {
+        int new_socket = accept(listener_fd, (struct sockaddr*)&address, &addrlen);
+            // Enable TCP keep-alive
+
+        int keepalive = 1; // Enable keepalive
+        int keepidle = 300; // 300 seconds (5 minutes) before sending keepalive probes
+        int keepintvl = 60; // 60 seconds between keepalive probes
+        int keepcnt = 5; // Number of probes before dropping the connection
+        setsockopt(new_socket, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
+        setsockopt(new_socket, IPPROTO_TCP, TCP_KEEPALIVE, &keepidle, sizeof(keepidle)); // Note: macOS uses TCP_KEEPALIVE instead of TCP_KEEPIDLE
+        setsockopt(new_socket, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
+        setsockopt(new_socket, IPPROTO_TCP, TCP_KEEPCNT, &keepcnt, sizeof(keepcnt));
+        if (new_socket < 0) {
+            if (errno == EINTR) {
+                // The accept call was interrupted by a signal; retry.
+                // std::cerr << "accept was interrupted, retrying...\n";
+                close(new_socket);
+                continue;
+            } else {
+                // Some other error occurred
+                // std::cerr << "Error on accept: " << strerror(errno) << std::endl;
+                close(new_socket);
+                continue; // Optionally, you could break if you want to terminate.
+            }
+    }
+    setNonBlockingSocket(new_socket);
+    printf("Connection accepted by process ID: %d\n", getpid());
+     // Send the new socket FD to the other process
+    send_fd(unix_socket, new_socket);
+    }
+    close(listener_fd);
+}
+
+static void cleanup_kqueue(int kq) {
+    struct kevent event;
+    std::vector<int> fds_to_close;
+
+    // Define an arbitrary large value to fetch events
+    const int max_events = 1024;
+    struct kevent events[max_events];
+    
+    // Get all the events currently in the kqueue
+    int num_events = kevent(kq, nullptr, 0, events, max_events, nullptr);
+
+    if (num_events < 0) {
+        std::cerr << "[Cache] Error fetching events from kqueue." << std::endl;
         return;
     }
 
+    for (int i = 0; i < num_events; ++i) {
+        int client_fd = events[i].ident;
+        
+        // Add the socket to a list for cleanup
+        fds_to_close.push_back(client_fd);
 
-    // Create two kqueues
-    int kq_accept = kqueue();  // For accepting connections
-        if (kq_accept == -1) {
-            close(server_fd);
-            throw std::runtime_error("Failed to create kqueue.");
+        // Remove it from kqueue
+        EV_SET(&event, client_fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
+        if (kevent(kq, &event, 1, nullptr, 0, nullptr) == -1) {
+            std::cerr << "[Cache] Failed to remove client_fd " << client_fd << " from kqueue." << std::endl;
         }
+    }
+
+    // Now, close all the sockets that were in kqueue
+    for (int client_fd : fds_to_close) {
+        close(client_fd);
+    }
+    // Finally, close the kqueue itself
+    close(kq);
+    std::cout << "[Cache] Kqueue and all associated sockets have been cleaned up." << std::endl;
+}
+
+void Cache::startCacheServer(){
+    #ifdef PRODUCTION
+    std::cout<<"Production Mode enabled"<<std::endl;
+    #else 
+    std::cout<<"Testing Mode Enabled"<<std::endl;
+    #endif
+    this->stopServer.store(false);
+    std::vector<int> server_read_sockets;
+    // int num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+    int num_cores = 1;
+    bool is_parent = false;
+
+    // Set up signal handling for graceful shutdown
+    struct sigaction sa;
+    sa.sa_handler = handle_signal;  // Specify the handler function
+    sigemptyset(&sa.sa_mask);       // Block no additional signals
+    sa.sa_flags = 0;                // No special flags
+    sigaction(SIGTERM, &sa, NULL);  // Handle SIGTERM
+    sigaction(SIGINT, &sa, NULL);   // Handle SIGINT (Ctrl+C)
+    sigaction(SIGKILL, &sa, NULL); 
+            
+    // Fork or use separate processes for multiple listeners
+    for (int i = 0; i < num_cores; i++) {
+        int unix_socket[2];
+        // Create a Unix domain socket pair
+        if (socketpair(AF_UNIX, SOCK_DGRAM, 0, unix_socket) == -1) {
+            perror("socketpair");
+            throw std::runtime_error("Failed to create unix domain socket.");
+        }
+        setNonBlockingSocket(unix_socket[0]);
+        setNonBlockingSocket(unix_socket[1]);
+        // Store the read end of each socket for the server
+        server_read_sockets.push_back(unix_socket[0]);
+        pid_t pid = fork();
+        if (pid == 0) {
+            listener_process(unix_socket[1],this->ip_,this->port_,i);  // Use different ports
+            close(unix_socket[1]);
+            exit(0);
+        }
+        else if (pid > 0) {
+            // In parent process
+            child_pids.push_back(pid);  // Track child PID in parent
+            
+        } else {
+            // Fork failed
+            std::cerr << "[Cache] Failed to fork process." << std::endl;
+        }
+    }
+
+    // Run the server process in the main process
+        is_parent = true;
+        this->startCacheServer_(server_read_sockets);
+        std::cout<<"[Cache] Server Shutdown completed"<<std::endl;
+        for(int unix_socket : server_read_sockets){
+            close(unix_socket);
+        }
+        // After the server finishes, send kill signal to child processes
+        for (pid_t child_pid : child_pids) {
+            // Check if the child process is still running
+            if (kill(child_pid, 0) == 0) {
+                kill(child_pid, SIGTERM);  // Send termination signal
+            }  
+        }
+        // Parent process waits for child processes to terminate
+        while (true) {
+            pid_t pid = wait(NULL);
+            if (pid == -1) {
+                break;  // Break when no more child processes
+            }
+        }
+        std::cout << "All Child Listener processes terminated" << std::endl;
+}
+
+void Cache::startCacheServer_(std::vector<int> unix_sockets) {
+
     int kq_client = kqueue();  // For handling client events
         if (kq_client == -1) {
-            close(server_fd);
             throw std::runtime_error("Failed to create kqueue.");
         }
 
     struct kevent event;
-    // Register server socket in kq_accept
-    EV_SET(&event, server_fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
-    if (kevent(kq_accept, &event, 1, NULL, 0, NULL) == -1) {
-        close(server_fd);
-        throw std::runtime_error("Failed to register server_fd with kqueue.");
-    }
-    EV_SET(&event, server_fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
-    if (kevent(kq_client, &event, 1, NULL, 0, NULL) == -1) {
-        close(server_fd);
-        throw std::runtime_error("Failed to register server_fd with kqueue.");
-    }
 
    
     if (pipe(wakeup_pipe) == -1) {
-        close(server_fd);
         throw std::runtime_error("Failed to create wakeup pipe.");
     } else {
     std::cout << "[Cache] Wakeup pipe created successfully" << std::endl;
@@ -534,35 +763,25 @@ void Cache::startCacheServer() {
     setNonBlockingSocket(wakeup_pipe[1]);
 
     // Register the read end of the wakeup pipe with kqueue
-    EV_SET(&event, wakeup_pipe[0], EVFILT_READ, EV_ADD, 0, 0, NULL);
-    if (kevent(kq_accept, &event, 1, NULL, 0, NULL) == -1) {
-        close(server_fd);
-        throw std::runtime_error("Failed to register wakeup pipe with kqueue.");
-    } else {
-    std::cout << "[Cache] Wakeup pipe registered with kqueue" << std::endl;
-}
 EV_SET(&event, wakeup_pipe[0], EVFILT_READ, EV_ADD, 0, 0, NULL);
     if (kevent(kq_client, &event, 1, NULL, 0, NULL) == -1) {
-        close(server_fd);
         throw std::runtime_error("Failed to register wakeup pipe with kqueue.");
     } else {
     std::cout << "[Cache] Wakeup pipe registered with kqueue" << std::endl;
 }
-
-        std::thread acceptThread([this, kq_accept,server_fd,kq_client] {
-    accept_connections(kq_accept, this,server_fd,kq_client,this->wakeup_pipe);
+        std::thread acceptThread([this,kq_client,unix_sockets] {
+    accept_connections(this,kq_client,unix_sockets);
 });
-    std::thread clientEventThread([this, kq_client,server_fd] {
-    handle_client_connections(kq_client,this,server_fd,this->wakeup_pipe);
+    std::thread clientEventThread([this, kq_client] {
+    handle_client_connections(kq_client,this,this->wakeup_pipe);
 });
-    std::cout<<"[Cache] Cluster Manager is Active for Cluster ID: "<<this->cluster_id_<<std::endl;
+    std::cout<<"[Cache] Cluster Manager is Active for Cluster ID: "<<this->cluster_id_<< std::endl;
     std::cout << "[Cache] Cache server started and listening on " << ip_ << ":" << port_ << std::endl;
 
 // Join threads when shutting down
     acceptThread.join();
     clientEventThread.join();
-    close(server_fd);  // Close server socket
-    close(kq_accept);         // Close kqueue
+    cleanup_kqueue(kq_client);
     close(kq_client); 
     std::cout << "[Cache] Cache Server Shutting down..." << std::endl;
 }
@@ -570,17 +789,45 @@ EV_SET(&event, wakeup_pipe[0], EVFILT_READ, EV_ADD, 0, 0, NULL);
 
 
 void Cache::handle_client(int new_socket){
-        // Receive the client's request
-        char buffer[1024] = {0};
+    char buffer[1024] = {0};
+    int retries = 1000;
+    while (retries > 0) {
         int valread = read(new_socket, buffer, 1024);
-        if (valread < 0) {
-            std::cerr << "[Cache] Failed to read from socket." << std::endl;
+        if (valread > 0) {
+            // Process the data
+            buffer[valread]='\0';
+            break;
+        } else if (valread == 0) {
+            // Connection closed
+            std::cerr << "[Cache] Client disconnected." << std::endl;
             close(new_socket);
             return;
+        } else {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Socket temporarily unavailable, retry
+                retries--;
+                continue;
+            } else {
+                std::cerr << "[Cache] Failed to read from socket: " << strerror(errno) << std::endl;
+                close(new_socket);
+                return;
+            }
         }
+    }
+    if (retries == 0) {
+        std::cerr << "[Cache] Read failed after multiple attempts." << std::endl;
+        close(new_socket);
+        return;
+    }
 
-        std::string request(buffer,valread);
+        std::string request(buffer);
         std::string response;
+         // Check if the request is a PING request
+        if (request.substr(0, 4) == "PING") {
+            // Send a PONG response back to the client
+            std::string response = "PONG";
+            send(new_socket, response.c_str(), response.size(), 0);
+        }
         // std::cout<<"Request:"<<request<<std::endl;
         size_t pos = 0;
         pos = request.find("\r\n");
@@ -646,7 +893,6 @@ void Cache::handle_client(int new_socket){
             NodeConnectionDetails node{node_id, node_ip, node_port};
             // Call the addNode method with the extracted IP and port
             addNode(node);
-
             response = "+OK Node Added\r\n";  // Response indicating the node was successfully added
             response += this->cluster_id_;
         }
@@ -678,238 +924,8 @@ void Cache::handle_client(int new_socket){
             }
             total_sent += sent;
         }
+        #ifdef PRODUCTION
         close(new_socket); // Close connection after handling
+        #endif
 }
 
-// void Cache::handle_client(int new_socket){
-//     // Receive the client's request
-//         char buffer[1024] = {0};
-//         int valread = read(new_socket, buffer, 1024);
-//         if (valread < 0) {
-//             std::cerr << "[Cache] Failed to read from socket." << std::endl;
-//             close(new_socket);
-//             return;
-//         }
-
-//         std::string request(buffer, valread);
-//         std::string response;
-//         // std::cout<<request;
-//         size_t pos = 0;
-//         pos = request.find("\r\n");
-
-//         if (pos != std::string::npos) {
-//             pos += 6; // Move past "\r\n$_\r\n"
-//         }
-//         // Process the request (simple GET and SET handling)
-//         try{
-//             std::string s = request.substr(pos, 3);
-//         }
-//         catch(const std::exception& e) {
-//             std::cout << "Caught a standard exception: " << e.what() << std::endl;
-//             close(new_socket);
-//             return;
-//         }
-//         if (request.substr(pos, 3) == "GET") {
-            
-//                 // Add to GET queue
-//             {
-//                 // std::lock_guard<std::mutex> lock(get_mutex);
-//                 get_queue.push(std::make_tuple(new_socket, request));
-//             }
-//             // get_cv.notify_one(); // Notify the GET handler
-//             return;
-
-//         } else if (request.substr(pos, 3) == "SET") {
-
-//             // Add to SET queue
-//             {
-//                 // std::lock_guard<std::mutex> lock(set_mutex);
-//                 set_queue.push(std::make_tuple(new_socket, request));
-//             }
-//             // set_cv.notify_one(); // Notify the SET handler
-//             return;
-//         } 
-//         else if (request.substr(pos, 3) == "ADD") {
-//             // Handle the "ADD" case to add a new node to the cluster
-
-//             // Move past "ADD\r\n"
-//             pos += 5;
-            
-//             // Extract the IP address
-//             size_t ip_length_start = request.find("$", pos) + 1;
-//             size_t ip_length_end = request.find("\r\n", ip_length_start);
-//             int ip_length = std::stoi(request.substr(ip_length_start, ip_length_end - ip_length_start));
-
-//             pos = ip_length_end + 2; // Move past "\r\n"
-//             std::string node_ip = request.substr(pos, ip_length);
-
-//             pos += ip_length + 2; // Move past IP and "\r\n"
-
-//             // Extract the port
-//             size_t port_length_start = request.find("$", pos) + 1;
-//             size_t port_length_end = request.find("\r\n", port_length_start);
-//             int port_length = std::stoi(request.substr(port_length_start, port_length_end - port_length_start));
-
-//             pos = port_length_end + 2; // Move past "\r\n"
-//             int node_port = std::stoi(request.substr(pos, port_length));
-//             boost::uuids::uuid uuid = boost::uuids::random_generator()();
-//             std::string node_id = boost::uuids::to_string(uuid);
-//             NodeConnectionDetails node{node_id, node_ip, node_port};
-//             // Call the addNode method with the extracted IP and port
-//             addNode(node);
-
-//             response = "+OK Node Added\r\n";  // Response indicating the node was successfully added
-//             response += this->cluster_id_;
-//         }
-//         else {
-//             response = "-ERROR Unknown command\r\n";
-//         }
-
-//         // Send the response back to the client
-//         ssize_t total_sent = 0;
-//         ssize_t bytes_to_send = response.size();
-//         const char* data = response.c_str();
-
-//         while (total_sent < bytes_to_send) {
-//             ssize_t sent = send(new_socket, data + total_sent, bytes_to_send - total_sent, 0);
-            
-//             if (sent < 0) {
-//                 if (errno == EINTR) {
-//                     continue;  // Interrupted by a signal, retry
-//                 }
-//                 else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-//                     // Socket temporarily unavailable, wait and retry
-//                     usleep(1000);  // sleep briefly and retry
-//                     continue;
-//                 }
-//                 else {
-//                     // Some other error occurred
-//                     throw std::runtime_error("Send failed");
-//                 }
-//             }
-//             total_sent += sent;
-//         }
-//         close(new_socket); // Close connection after handling
-// }
-
-void Cache::get_handler() {
-    while (!this->stopServer.load()) {
-         std::tuple<int, std::string> task;
-        //  std::cout<<"Running get handler"<<std::endl;
-
-        {
-            // std::unique_lock<std::mutex> lock(get_mutex);
-            // get_cv.wait(lock, [this] { return !get_queue.empty() || this->stopServer.load(); });
-            if(this->get_queue.empty()){
-                continue;
-            }
-            if (this->stopServer.load()) {
-                return; // Exit the worker thread gracefully
-            }
-            task = get_queue.front();
-            get_queue.pop();
-        }
-        int client_socket = std::get<0>(task);
-        std::string request = std::get<1>(task);
-        // Process the GET request
-        std::string response;
-        try {
-                response = routeGetRequest(request);
-            } catch (const std::runtime_error& e) {
-                response = std::string("-ERR: ") + e.what();
-            }
-
-        // Optionally, send the response back to the client or handle it accordingly
-        // Send the response back to the client
-        ssize_t total_sent = 0;
-        ssize_t bytes_to_send = response.size();
-        const char* data = response.c_str();
-
-        while (total_sent < bytes_to_send) {
-            ssize_t sent = send(client_socket, data + total_sent, bytes_to_send - total_sent, 0);
-            
-            if (sent < 0) {
-                if (errno == EINTR) {
-                    continue;  // Interrupted by a signal, retry
-                }
-                else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    // Socket temporarily unavailable, wait and retry
-                    usleep(1000);  // sleep briefly and retry
-                    continue;
-                }
-                else {
-                    // Some other error occurred
-                    throw std::runtime_error("Send failed");
-                }
-            }
-            total_sent += sent;
-        }
-        close(client_socket); // Close connection after handling
-    }
-}
-
-void Cache::set_handler() {
-    while (!this->stopServer.load()) {
-         std::tuple<int, std::string> task;
-        //  std::cout<<"Running set handler"<<std::endl;
-
-        {
-            // std::unique_lock<std::mutex> lock(set_mutex);
-            // set_cv.wait(lock, [this] { return !set_queue.empty() || this->stopServer.load(); });
-            if(this->set_queue.empty()){
-                continue;
-            }
-            if (this->stopServer.load()) {
-                return; // Exit the worker thread gracefully
-            }
-            task = set_queue.front();
-            set_queue.pop();
-        }
-        int client_socket = std::get<0>(task);
-        std::string request = std::get<1>(task);
-        // Process the GET request
-        std::string response;
-        std::string result = routeSetRequest(request);
-        std::cout<<"set result:"<<result<<std::endl;
-            if (result == "Failed:No nodes available to route request.") {
-                response = "-ERR No nodes available to route request.\r\n";
-            } else if (result == "Failed:All nodes are currently being deleted or no nodes available.") {
-                response = "-ERR All nodes are currently being deleted or no nodes available.\r\n";
-            }
-            else {
-                // If it's not a failure, respond with OK
-                response = "+OK\r\n";
-            }
-        std::cout<<"set Response:"<<response<<std::endl;
-        // Optionally, send the response back to the client or handle it accordingly
-        // Send the response back to the client
-        ssize_t total_sent = 0;
-        ssize_t bytes_to_send = response.size();
-        const char* data = response.c_str();
-
-        while (total_sent < bytes_to_send) {
-            ssize_t sent = send(client_socket, data + total_sent, bytes_to_send - total_sent, 0);
-            
-            if (sent < 0) {
-                if (errno == EINTR) {
-                    std::cout<<"1"<<std::endl;
-                    continue;  // Interrupted by a signal, retry
-                }
-                else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    // Socket temporarily unavailable, wait and retry
-                    usleep(1000);  // sleep briefly and retry
-                    std::cout<<"2"<<std::endl;
-                    continue;
-                }
-                else {
-                    // Some other error occurred
-                    std::cout<<"3"<<std::endl;
-                    std::cerr << "Send failed: " << strerror(errno) << " (errno: " << errno << ")" << std::endl;
-                    throw std::runtime_error("Send failed");
-                }
-            }
-            total_sent += sent;
-        }
-        close(client_socket); // Close connection after handling
-    }
-}

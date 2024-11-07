@@ -7,6 +7,10 @@
 #include <future>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <vector>
+
 
 
 
@@ -233,14 +237,36 @@ void CacheNode::assignToCluster(const std::string& cluster_id, std::string& clus
 
 
 void CacheNode::handle_client(int client_socket) {
-    char buffer[1024];
-    ssize_t bytes_read = read(client_socket, buffer, sizeof(buffer) - 1);
-    if (bytes_read <= 0) {
+    char buffer[1024] = {0};
+    int retries = 1000;
+    while (retries > 0) {
+        int valread = read(client_socket, buffer, 1024);
+        if (valread > 0) {
+            // Process the data
+            buffer[valread]='\0';
+            break;
+        } else if (valread == 0) {
+            // Connection closed
+            std::cerr << "[CacheNode] Client disconnected." << std::endl;
+            // close(client_socket);
+            return;
+        } else {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Socket temporarily unavailable, retry
+                retries--;
+                continue;
+            } else {
+                std::cerr << "[CacheNode] Failed to read from socket: " << strerror(errno) << std::endl;
+                // close(client_socket);
+                return;
+            }
+        }
+    }
+    if (retries == 0) {
+        std::cerr << "[CacheNode] Read failed after multiple attempts." << std::endl;
         close(client_socket);
         return;
     }
-    buffer[bytes_read] = '\0';
-    
     
     std::string request(buffer);
     std::string response;
@@ -255,7 +281,6 @@ void CacheNode::handle_client(int client_socket) {
         // Handle partial write if necessary
         std::cerr << "Warning: Partial write to socket." << std::endl;
     }
-    close(client_socket);
 }
 
 std::string CacheNode::sendToNode(const std::string& ip, int port, const std::string& request) {
@@ -566,6 +591,41 @@ int setNonBlocking(int socket) {
         handle_client(new_socket);
     }
 
+std::vector<int> clientSockets; // Global list of client sockets
+std::mutex clientSocketsMutex; // Mutex to synchronize access to the client socket list
+
+
+void handleClosedClientSockets(int kq_client, CacheNode* cache_node) {
+    while (!cache_node->isServerStopped()) {
+        std::this_thread::sleep_for(std::chrono::seconds(5)); // Monitor every 5 seconds
+
+        std::lock_guard<std::mutex> lock(clientSocketsMutex); // Lock the client socket list
+        for (auto it = clientSockets.begin(); it != clientSockets.end(); ) {
+            int client_fd = *it;
+
+            // Check if the client socket is still alive
+            char buffer;
+            int result = recv(client_fd, &buffer, 1, MSG_PEEK | MSG_DONTWAIT);
+            if (result == 0 || (result == -1 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+                // Connection closed or error
+                std::cerr << "[CacheNode] Removing inactive client socket: " << client_fd << std::endl;
+
+                // Remove from kqueue
+                struct kevent event;
+                EV_SET(&event, client_fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+                if (kevent(kq_client, &event, 1, NULL, 0, NULL) == -1) {
+                    std::cerr << "[CacheNode] Failed to deregister client socket from kqueue." << std::endl;
+                }
+
+                close(client_fd); // Close the socket
+                it = clientSockets.erase(it); // Remove socket from the list
+            } else {
+                ++it; // Move to the next socket
+            }
+        }
+    }
+}
+
 void accept_connections(int kq, CacheNode* cache_node,int server_fd,int kq_client,int wakeup_pipe[2]) {
         struct timespec timeout;
         timeout.tv_sec = 1;  // 1 second timeout
@@ -616,13 +676,17 @@ void accept_connections(int kq, CacheNode* cache_node,int server_fd,int kq_clien
                     std::cerr << "[CacheNode] Failed to set client socket to non-blocking mode." << std::endl;
                     close(new_socket);
                 } else {
-                    std::cout << "[CacheNode] New connection accepted." << std::endl;
-
+                    std::cout << "[CacheNode] New connection accepted. " << std::endl;
                     // Register the new socket for read events
                     EV_SET(&event, new_socket, EVFILT_READ, EV_ADD, 0, 0, NULL);
                     if (kevent(kq_client, &event, 1, NULL, 0, NULL) == -1) {
                         std::cerr << "[CacheNode] Failed to register new_socket with kqueue." << std::endl;
                         close(new_socket);
+                    }
+                    else {
+                        // Add new_socket to the clientSockets list in a thread-safe manner
+                        std::lock_guard<std::mutex> lock(clientSocketsMutex);
+                        clientSockets.push_back(new_socket);
                     }
                 }
             }
@@ -640,6 +704,7 @@ void handle_client_connections(int kq, CacheNode* cache_node,int server_fd,int w
     struct kevent event;
     struct kevent events[10];
     while (!cache_node->isServerStopped()) {
+        // std::cout << "[CacheNode] Handle connections running "<< "Process ID: " << getpid() << ", Thread ID: " << std::this_thread::get_id() << std::endl;
         int nev = kevent(kq, NULL, 0, events, 10, NULL);  // Wait for read events
         if (nev == -1) {
             std::cerr << "[CacheNode] Error with kevent (client event loop): " << strerror(errno) << std::endl;
@@ -671,14 +736,48 @@ void handle_client_connections(int kq, CacheNode* cache_node,int server_fd,int w
                 if (events[i].filter == EVFILT_READ && events[i].ident!=server_fd) {
                     int client_fd = events[i].ident;
                     cache_node->handleClient(client_fd);
-                    std::cout << "[CacheNode] Client connection closed." << std::endl;
-                    // Remove client socket from kqueue
-                    EV_SET(&event, client_fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-                    kevent(kq, &event, 1, NULL, 0, NULL);
                 }
             }
         }
     }
+}
+
+static void cleanup_kqueue(int kq) {
+    struct kevent event;
+    std::vector<int> fds_to_close;
+
+    // Define an arbitrary large value to fetch events
+    const int max_events = 1024;
+    struct kevent events[max_events];
+    
+    // Get all the events currently in the kqueue
+    int num_events = kevent(kq, nullptr, 0, events, max_events, nullptr);
+
+    if (num_events < 0) {
+        std::cerr << "[CacheNode] Error fetching events from kqueue." << std::endl;
+        return;
+    }
+
+    for (int i = 0; i < num_events; ++i) {
+        int client_fd = events[i].ident;
+        
+        // Add the socket to a list for cleanup
+        fds_to_close.push_back(client_fd);
+
+        // Remove it from kqueue
+        EV_SET(&event, client_fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
+        if (kevent(kq, &event, 1, nullptr, 0, nullptr) == -1) {
+            std::cerr << "[CacheNode] Failed to remove client_fd " << client_fd << " from kqueue." << std::endl;
+        }
+    }
+
+    // Now, close all the sockets that were in kqueue
+    for (int client_fd : fds_to_close) {
+        close(client_fd);
+    }
+    // Finally, close the kqueue itself
+    close(kq);
+    std::cout << "[CacheNode] Kqueue and all associated sockets have been cleaned up." << std::endl;
 }
 
 void CacheNode::start_node_server() {
@@ -796,10 +895,31 @@ EV_SET(&event, wakeup_pipe[0], EVFILT_READ, EV_ADD, 0, 0, NULL);
     std::thread clientEventThread([this, kq_client,server_socket] {
     handle_client_connections(kq_client,this,server_socket,this->wakeup_pipe);
 });
+
+    std::thread monitorClientSocketsThread([kq_client,this] {
+        handleClosedClientSockets(kq_client,this);
+    });
+
     std::cout << "[CacheNode] Cache Node Server is running on  "<<this->ip_<<":"<< this->port_ << std::endl;
     acceptThread.join();
     clientEventThread.join();
+    monitorClientSocketsThread.join();
+    std::lock_guard<std::mutex> lock(clientSocketsMutex); // Lock the client socket list
+    for (auto it = clientSockets.begin(); it != clientSockets.end();){
+        int socket = *it;
+        // Remove from kqueue
+        struct kevent event;
+        EV_SET(&event, socket, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+        if (kevent(kq_client, &event, 1, NULL, 0, NULL) == -1) {
+            std::cerr << "[CacheNode] Failed to deregister client socket from kqueue." << std::endl;
+        }
+
+        close(socket); // Close the socket
+        // Remove the socket from the clientSockets vector
+        it = clientSockets.erase(it); // Erase returns the next iterator
+    }
     close(server_socket);
+    cleanup_kqueue(kq_client);
     close(kq_accept);         
     close(kq_client);
     // Join all worker threads

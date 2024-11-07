@@ -15,8 +15,15 @@ cleanup() {
         echo "Cleaning up..."
         for PID in "${PIDS[@]}"; do
             if kill -0 "$PID" 2>/dev/null; then
-                echo -e "Killing process with PID: $PID \n"
-                kill -9 "$PID" 2>/dev/null || echo "Failed to kill process $PID"
+                echo -e "\nKilling process with PID: $PID "
+                # Kill child processes of this PID
+                # CHILD_PIDS=$(pgrep -P "$PID")
+                # for CHILD_PID in $CHILD_PIDS; do
+                #     echo "Killing child process with PID: $CHILD_PID"
+                #     kill -9 -"$CHILD_PID" 2>/dev/null || echo "Failed to kill child process $CHILD_PID"
+                # done
+                # Now kill the parent process
+                kill -15 "$PID" 2>/dev/null || echo "Failed to kill process $PID"
 
                 WAIT_TIME=0
                 while kill -0 "$PID" 2>/dev/null; do
@@ -28,13 +35,19 @@ cleanup() {
                     WAIT_TIME=$((WAIT_TIME + 1))
                 done
 
+                 # If process is still running, forcefully kill it using SIGKILL (9)
                 if kill -0 "$PID" 2>/dev/null; then
-                    echo -e "\nProcess $PID is still running after waiting."
+                    echo "Forcing termination of process with PID: $PID"
+                    kill -9 "$PID" 2>/dev/null || echo "Failed to forcefully kill process $PID"
+                fi
+
+                if kill -0 "$PID" 2>/dev/null; then
+                    echo  "Process $PID is still running after forcing termination."
                 else
-                    echo -e "\nProcess $PID terminated successfully."
+                    echo  "Process $PID terminated successfully."
                 fi
             else
-                echo "Process $PID is already terminated."
+                echo -e "\nProcess $PID is already terminated."
             fi
         done
         CLEANED_UP=true
@@ -48,8 +61,8 @@ cleanup() {
 build_project() {
     echo "Building the project..."
     conan install . --build=missing
-    cmake --preset conan-release
-    cmake --build --preset conan-release
+    cmake --preset conan-custom-preset
+    cmake --build --preset conan-custom-preset
 
 }
 

@@ -23,16 +23,15 @@ TEST(CacheTest, SetAndGet) {
     Cache cache(ip, port);
     // Start the cache server in a separate thread
     std::thread cacheThread(startCacheServer, std::ref(cache));
-    
     // Give some time for servers to start (optional)
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::this_thread::sleep_for(std::chrono::seconds(5));
 
     CacheNode node = CacheNode(1024 * 1024, std::chrono::seconds(5), EvictionStrategy::NoEviction); // 1MB max memory, 5 seconds TTL
     // Start the node server in a separate thread
     std::thread nodeThread(startNodeServer, std::ref(node), std::ref(cache), std::ref(ip), port);
 
     // Give some time for servers to start (optional)
-    std::this_thread::sleep_for(std::chrono::seconds(2));
+    std::this_thread::sleep_for(std::chrono::seconds(5));
 
     // Test setting values
     std::string setResponse = cache.set("key1", "value1");
@@ -97,7 +96,7 @@ TEST(CacheTest, SetAndGet) {
 // Unit Test for Cache::get with non-existing key
 TEST(CacheTest, GetNonExistingKey) {
     std::string ip = "127.0.0.1";
-    int port = 7068;
+    int port = 7069;
     Cache cache(ip, port);
     // Start the cache server in a separate thread
     std::thread cacheThread(startCacheServer, std::ref(cache));
@@ -105,7 +104,7 @@ TEST(CacheTest, GetNonExistingKey) {
     // Give some time for servers to start (optional)
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    CacheNode node = CacheNode(1024 * 1024, std::chrono::seconds(5), EvictionStrategy::NoEviction,"127.0.0.1",8068); // 1MB max memory, 5 seconds TTL
+    CacheNode node = CacheNode(1024 * 1024, std::chrono::seconds(5), EvictionStrategy::NoEviction,"127.0.0.1",8069); // 1MB max memory, 5 seconds TTL
     // Start the node server in a separate thread
     std::thread nodeThread(startNodeServer, std::ref(node), std::ref(cache), std::ref(ip), port);
     // Give some time for servers to start (optional)
