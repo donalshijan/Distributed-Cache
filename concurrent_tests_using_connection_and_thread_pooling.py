@@ -55,7 +55,7 @@ async def concurrent_test(pool, keys,max_concurrency=os.cpu_count()):
     if max_concurrency is None:
         max_concurrency =  8
     # Use tqdm for async tasks
-    with tqdm(total=len(keys), desc="Processing keys", unit="request") as progress:
+    with tqdm(total=len(keys), desc="Progress", unit="request") as progress:
         valid_responses_count = 0
         semaphore = asyncio.Semaphore(max_concurrency)  # Control number of active tasks
         log_entries = []

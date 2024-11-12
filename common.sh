@@ -16,13 +16,6 @@ cleanup() {
         for PID in "${PIDS[@]}"; do
             if kill -0 "$PID" 2>/dev/null; then
                 echo -e "\nKilling process with PID: $PID "
-                # Kill child processes of this PID
-                # CHILD_PIDS=$(pgrep -P "$PID")
-                # for CHILD_PID in $CHILD_PIDS; do
-                #     echo "Killing child process with PID: $CHILD_PID"
-                #     kill -9 -"$CHILD_PID" 2>/dev/null || echo "Failed to kill child process $CHILD_PID"
-                # done
-                # Now kill the parent process
                 kill -15 "$PID" 2>/dev/null || echo "Failed to kill process $PID"
 
                 WAIT_TIME=0

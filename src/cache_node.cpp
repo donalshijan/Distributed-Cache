@@ -928,5 +928,5 @@ EV_SET(&event, wakeup_pipe[0], EVFILT_READ, EV_ADD, 0, 0, NULL);
             t.join(); // Wait for the thread to finish
         }
     }
-    std::cout<<"[CacheNode] Cache Node Server Shutting down..."<<std::endl;
+    std::cout<<"[CacheNode] Server shutdown completed."<<std::endl;
 }

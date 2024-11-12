@@ -590,7 +590,7 @@ int setup_listener(std::string ip, int port){
 
 void listener_process(int unix_socket, std::string ip, int port, int core_id) {
 
-    set_affinity(core_id);
+    // set_affinity(core_id);
     // Set up socket, bind, listen, accept, etc.
     int listener_fd = setup_listener(ip,port);
     struct sockaddr_in address;
@@ -625,7 +625,7 @@ void listener_process(int unix_socket, std::string ip, int port, int core_id) {
             }
     }
     setNonBlockingSocket(new_socket);
-    printf("Connection accepted by process ID: %d\n", getpid());
+    // printf("Connection accepted by process ID: %d\n", getpid());
      // Send the new socket FD to the other process
     send_fd(unix_socket, new_socket);
     }
@@ -722,7 +722,7 @@ void Cache::startCacheServer(){
     // Run the server process in the main process
         is_parent = true;
         this->startCacheServer_(server_read_sockets);
-        std::cout<<"[Cache] Server Shutdown completed"<<std::endl;
+        std::cout<<"[Cache] Server stopped"<<std::endl;
         for(int unix_socket : server_read_sockets){
             close(unix_socket);
         }
@@ -740,7 +740,8 @@ void Cache::startCacheServer(){
                 break;  // Break when no more child processes
             }
         }
-        std::cout << "All Child Listener processes terminated" << std::endl;
+        std::cout << "[Cache] All Child Listener processes terminated" << std::endl;
+        std::cout<<"[Cache] Server Shutdown completed."<<std::endl;
 }
 
 void Cache::startCacheServer_(std::vector<int> unix_sockets) {
@@ -783,7 +784,7 @@ EV_SET(&event, wakeup_pipe[0], EVFILT_READ, EV_ADD, 0, 0, NULL);
     clientEventThread.join();
     cleanup_kqueue(kq_client);
     close(kq_client); 
-    std::cout << "[Cache] Cache Server Shutting down..." << std::endl;
+    std::cout << "[Cache] Server Shutting down..." << std::endl;
 }
 
 
