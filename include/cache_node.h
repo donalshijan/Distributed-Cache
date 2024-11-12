@@ -19,6 +19,9 @@
 #include <sstream>
 #include <sys/event.h> 
 #include <condition_variable>
+#include <semaphore.h>
+#include "node_connection_details.h"
+#include "connection_pool.h"
 
 #define DEFAULT_CACHE_NODE_PORT 8069
 
@@ -26,13 +29,9 @@
 
 #define DEFAULT_IP "127.0.0.1" // Localhost as default IP
 
-struct NodeConnectionDetails {
-    std::string node_id;
-    std::string ip;
-    int port;
-};
 
 
+struct SharedMemoryQueue;
 
 class Cache {
 public:
@@ -52,30 +51,22 @@ public:
     void shutDownCacheServer();
     bool isServerStopped() const;
     void handleClient(int new_socket); 
-    // std::string getPublicIp();
 
 private:
-    std::queue<std::tuple<int, std::string>> get_queue;
-    std::queue<std::tuple<int, std::string>> set_queue;
-    std::mutex get_mutex;
-    std::mutex set_mutex;
-    std::condition_variable get_cv;
-    std::condition_variable set_cv;
     int wakeup_pipe[2]; // Create a pipe for waking up the kqueue
     std::vector<NodeConnectionDetails> nodes_;
     size_t next_node_ = 0;
-    std::hash<std::string> hasher_;
     std::mutex mutex_;
     std::string cluster_id_;
     std::string ip_;
     int port_;
     std::string node_id_being_deleted_;
     std::atomic<bool> stopServer;
+    ConnectionPool connection_pool;
     // Helper function to send data over TCP/IP
-    std::string sendToNode(const std::string& ip, int port, const std::string& request);
+    std::string sendToNode(const std::string& node_id, const std::string& request);
     void handle_client(int new_socket);
-    void get_handler();
-    void set_handler();
+    void startCacheServer_(std::vector<int> unix_sockets);
 };
 
 enum EvictionStrategy {

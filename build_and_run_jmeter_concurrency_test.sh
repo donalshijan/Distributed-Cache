@@ -34,3 +34,5 @@ cleanup
 
 echo "See Test results in JmeterConcurrencyTestResults.txt"
 echo "See Test logs in JmeterConcurrencyTestFiles/testlogs.log"
+
+pkill -9 distributed_cache

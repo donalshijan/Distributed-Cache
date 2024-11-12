@@ -51,7 +51,8 @@ if [ -f "concurrent_test_logs.log" ]; then
 fi
 # Run concurrent tests
 echo "Running concurrent tests..."
-python3 concurrent_tests.py --cache_server_ip "$CLUSTER_IP" --cache_server_port "$CLUSTER_PORT"
+# python3 concurrent_tests.py --cache_server_ip "$CLUSTER_IP" --cache_server_port "$CLUSTER_PORT"
+python3 concurrent_tests_using_connection_and_thread_pooling.py --cache_server_ip "$CLUSTER_IP" --cache_server_port "$CLUSTER_PORT"
 
 echo "All tests completed."
 
@@ -60,3 +61,5 @@ cleanup
 
 echo "See Test results in results.txt"
 echo "See test logs in sequential_test_logs.log and concurrent_test_logs.log"
+
+pkill -9 distributed_cache

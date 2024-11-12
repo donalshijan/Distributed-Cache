@@ -34,3 +34,5 @@ cleanup
 
 echo "See Test results by opening up testResults.jtl file under JmeterLoadTestFiles in various listeners added under thread group in jmeter gui mode"
 echo "See Test logs in JmeterLoadTestFiles/testlogs.log"
+
+pkill -9 distributed_cache

@@ -1,0 +1,26 @@
+{
+    "version": 8,
+    "configurePresets": [
+        {
+            "name": "conan-custom-preset",
+            "displayName": "'conan-custom-preset' config",
+            "description": "'conan-custom-preset' configure using 'Unix Makefiles' generator with cache variable to switch between production and testing mode",
+            "generator": "Unix Makefiles",
+            "cacheVariables": {
+                "CMAKE_POLICY_DEFAULT_CMP0091": "NEW",
+                "CMAKE_BUILD_TYPE": "Release",
+                "ENABLE_PRODUCTION": "OFF"
+            },
+            "toolchainFile": "build/Release/generators/conan_toolchain.cmake",
+            "binaryDir": "/Users/donalshijan/Workspace/PersonalProjects/Distributed_Cache/build/Release"
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "conan-custom-preset",
+            "description": "",
+            "displayName": "",
+            "configurePreset": "conan-custom-preset"
+        }
+    ]
+}

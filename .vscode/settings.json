@@ -54,6 +54,7 @@
         "queue": "cpp",
         "deque": "cpp",
         "__memory": "cpp",
-        "condition_variable": "cpp"
+        "condition_variable": "cpp",
+        "set": "cpp"
     }
 }

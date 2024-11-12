@@ -19,14 +19,21 @@ FetchContent_MakeAvailable(googletest)
 
 file(GLOB SOURCES "src/*.cpp")
 
+option(ENABLE_PRODUCTION "Enable production mode" ON)
+
 # Add main executable
 add_executable(distributed_cache ${SOURCES})
 
 # Link pthread
 target_link_libraries(distributed_cache pthread)
 
+# Apply production flag if enabled
+if(ENABLE_PRODUCTION)
+    add_definitions(-DPRODUCTION)
+endif()
+
 # Create library for cache implementation
-add_library(CacheLib src/cache.cpp src/cache_node.cpp)
+add_library(CacheLib src/cache.cpp src/cache_node.cpp src/connection_pool.cpp)
 
 # Test sources
 file(GLOB TEST_SOURCES "tests/*.cpp")
