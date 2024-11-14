@@ -55,12 +55,17 @@ public:
 private:
     int wakeup_pipe[2]; // Create a pipe for waking up the kqueue
     std::vector<NodeConnectionDetails> nodes_;
+    std::map<int, NodeConnectionDetails> hash_ring_;
+    std::hash<std::string> hasher_; // For consistent hashing
+    int virtual_nodes_count_ = 3;    // Number of virtual nodes per node, adjust as needed
     size_t next_node_ = 0;
     std::mutex mutex_;
     std::string cluster_id_;
     std::string ip_;
     int port_;
-    std::string node_id_being_deleted_;
+    NodeConnectionDetails& findNodeForKey(const std::string& key);
+    NodeConnectionDetails* getNextNodeClockwise(const NodeConnectionDetails& current_node); 
+    std::vector<std::string> node_ids_being_deleted_;
     std::atomic<bool> stopServer;
     ConnectionPool connection_pool;
     // Helper function to send data over TCP/IP
