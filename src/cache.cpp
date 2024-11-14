@@ -173,23 +173,16 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
         if (it != nodes_.end()) {
             NodeConnectionDetails node_to_remove = *it;
 
-            // Collect node IDs to migrate data to
-            std::vector<std::string> target_node_ids;
-            for (const auto& node : nodes_) {
-                if (node.node_id != node_id) {
-                    target_node_ids.push_back(node.node_id);
-                }
-            }
-
-            // Send migration message to the target nodes
-            migrateData(node_to_remove.node_id, target_node_ids);
-
-            node_ids_being_deleted_.push_back(node_to_remove.node_id);
-
             for (int i = 0; i < virtual_nodes_count_; ++i) {
                 int hash = hasher_(node_id + std::to_string(i));
                 hash_ring_.erase(hash);
             }
+
+            // Send migration message to the target nodes
+            migrateData(node_to_remove.node_id);
+
+            node_ids_being_deleted_.push_back(node_to_remove.node_id);
+
             // Erase the node from the vector
             nodes_.erase(it, nodes_.end());
         } else {
@@ -197,7 +190,7 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
         }
     }
 
-    void Cache::migrateData(const std::string& node_id, const std::vector<std::string>& target_node_ids) {
+    void Cache::migrateData(const std::string& node_id) {
     // Find the node with the matching node_id
         auto it = std::find_if(nodes_.begin(), nodes_.end(),
             [&node_id](const NodeConnectionDetails& node) {
@@ -216,25 +209,14 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
 
             // Add the number of target nodes
             migrate_message << "*";
-            migrate_message << target_node_ids.size() << "\r\n";
+            // migrate_message << target_node_ids.size() << "\r\n";
+            migrate_message << "1" << "\r\n";
 
-            // Add each target node's IP and port
-            for (const auto& target_node_id : target_node_ids) {
-                auto target_it = std::find_if(nodes_.begin(), nodes_.end(),
-                    [&target_node_id](const NodeConnectionDetails& node) {
-                        return node.node_id == target_node_id;
-                    });
+            std::stringstream target_info;
+            target_info << this->ip_ << ":" << this->port_;
+            std::string target_info_str = target_info.str();
 
-                if (target_it != nodes_.end()) {
-                    std::stringstream target_info;
-                    target_info << target_it->ip << ":" << target_it->port;
-                    std::string target_info_str = target_info.str();
-
-                    migrate_message << "$" << target_info_str.size() << "\r\n" << target_info_str << "\r\n";
-                } else {
-                    std::cerr << "[Cache] Warning: Target node with ID " << target_node_id << " not found in nodes list." << std::endl;
-                }
-            }
+            migrate_message << "$" << target_info_str.size() << "\r\n" << target_info_str << "\r\n";
             // Send the MIGRATE message to the node with node_id
             try {
                 // Call the sendToNode method and store the return message.

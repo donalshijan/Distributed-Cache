@@ -39,7 +39,7 @@ public:
 
     void addNode(const NodeConnectionDetails& node_connection_details);
     void removeNode(const std::string& node_id);
-    void migrateData(const std::string& node_id, const std::vector<std::string>& target_nodes);
+    void migrateData(const std::string& node_id);
     std::string getClusterId() const;
 
     std::string routeGetRequest(const std::string& request);
