@@ -234,36 +234,7 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
         }
     }
 
-    NodeConnectionDetails* Cache::getNextNodeClockwise(const NodeConnectionDetails& current_node) {
-        // Ensure nodes are sorted on the ring based on their hash values
-        if (hash_ring_.empty()) {
-            throw std::runtime_error("Hash ring is empty.");
-        }
-
-        // Find the current node's position in the hash ring
-        auto it = std::find_if(hash_ring_.begin(), hash_ring_.end(),
-                            [&current_node](const std::pair<const int, NodeConnectionDetails>& node) {
-                                return node.second.node_id == current_node.node_id;
-                            });
-
-        if (it == hash_ring_.end()) {
-            throw std::runtime_error("Current node not found in hash ring.");
-        }
-        // Store the starting iterator to detect when we've wrapped around
-        auto starting_position = it;
-       // Move to the next distinct physical node by skipping over all virtual nodes of the current node
-        do {
-            ++it;
-            if (it == hash_ring_.end()) {
-                it = hash_ring_.begin();  // Wrap around to the first node on the ring
-            }
-        } while (it->second.node_id == current_node.node_id && it != starting_position);  // Skip virtual nodes of the same physical node
-        // Return a pointer to the next node in the ring
-        return &(it->second);
-    }
-
-    std::string Cache::routeGetRequest(const std::string& request) {
-        std::lock_guard<std::mutex> lock(mutex_);
+    NodeConnectionDetails& Cache::getStartingNode(const std::string& request){
         // Extract key from the request string
         size_t pos = 0;
 
@@ -282,19 +253,81 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
         // Extract key
         pos = key_length_end + 2; // Move past "\r\n"
         std::string key = request.substr(pos, key_length);
-        NodeConnectionDetails* search_start_node = &findNodeForKey(key);
+        return findNodeForKey(key);
+    }
 
-        NodeConnectionDetails* current_node = search_start_node;
+    int Cache::getNextNodeClockwise(int current_hash) {
+        // Ensure nodes are sorted on the ring based on their hash values
+        if (hash_ring_.empty()) {
+            throw std::runtime_error("Hash ring is empty.");
+        }
+
+        // Find the current hash's position in the hash ring
+        auto it = hash_ring_.upper_bound(current_hash);
+
+        // If we've reached the end, wrap around to the beginning
+        if (it == hash_ring_.end()) {
+            it = hash_ring_.begin();
+        }
+
+        // Store the starting iterator to detect when we've wrapped around
+        auto starting_position = it;
+
+        // Iterate clockwise until we find a distinct physical node
+        do {
+            // Check if the current node is distinct from the starting hash
+            if (it->first != current_hash) {
+                return it->first;  // Return the distinct node
+            }
+
+            // Move to the next position, wrapping around if necessary
+            ++it;
+            if (it == hash_ring_.end()) {
+                it = hash_ring_.begin();
+            }
+        } while (it != starting_position);  // Stop if we've wrapped around the entire ring
+
+        return it->first;
+    }
+
+    std::string Cache::routeGetRequest(const std::string& request) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // Extract key from the request string
+
+        NodeConnectionDetails search_start_node = getStartingNode(request);
+
+        // Find the hash value of the starting node
+        auto hash_it = std::find_if(hash_ring_.begin(), hash_ring_.end(),
+            [search_start_node](const auto& pair) {
+                return pair.second.node_id == search_start_node.node_id;
+            });
+
+        if (hash_it == hash_ring_.end()) {
+            throw std::runtime_error("Starting node not found in hash ring.");
+        }
+        
+        int current_hash = hash_it->first; // Starting node hash
+
+        int starting_hash = current_hash;
 
 
         // Find the node that holds the key
         do {
+            auto current_hash_node_pair = std::find_if(hash_ring_.begin(), hash_ring_.end(),
+                [&current_hash](const auto& pair) {
+                    return pair.first == current_hash;
+                });
+                // Check if the iterator is valid
+                if (current_hash_node_pair == hash_ring_.end()) {
+                    throw std::runtime_error("Hash not found in hash ring.");
+                }
+            NodeConnectionDetails current_node = current_hash_node_pair->second;
             // Try to fetch the key from the current node
             std::string response;
             try {
-                response = sendToNode(current_node->node_id, request);
+                response = sendToNode(current_node.node_id, request);
             } catch (const std::runtime_error& e) {
-                std::cerr << "[Cache] Error: " << e.what() << " on node " << current_node->node_id << std::endl;
+                std::cerr << "[Cache] Error: " << e.what() << " on node " << current_node.node_id << std::endl;
                 return std::string("Error: ") + e.what();
             }
 
@@ -304,9 +337,9 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
             }
 
             // Move to the next node in a clockwise direction on the ring
-            current_node = getNextNodeClockwise(*current_node);
+            current_hash = getNextNodeClockwise(current_hash);
 
-        } while (current_node->node_id != search_start_node->node_id);  // Continue until we return to the starting node
+        } while (current_hash != starting_hash);  // Continue until we return to the starting node
 
         throw std::runtime_error("Key does not belong to any node in the routing table.");
     }

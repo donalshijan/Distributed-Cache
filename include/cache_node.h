@@ -43,8 +43,10 @@ public:
     std::string getClusterId() const;
 
     std::string routeGetRequest(const std::string& request);
+    void routeGetRequestsInBuffer(const std::string& starting_node_id);
     std::string routeSetRequest(const std::string& request);
     std::string get(const std::string& key);
+    std::string getKey(const std::string& key);
     std::string set(const std::string& key, const std::string& value);
     
     void startCacheServer();
@@ -63,8 +65,11 @@ private:
     std::string cluster_id_;
     std::string ip_;
     int port_;
+    NodeConnectionDetails& getStartingNode(const std::string& request);
     NodeConnectionDetails& findNodeForKey(const std::string& key);
-    NodeConnectionDetails* getNextNodeClockwise(const NodeConnectionDetails& current_node); 
+    void addRequestToBuffer(const std::string& request);
+    int getNextNodeClockwiseForMultiplexing(int current_hash);
+    int getNextNodeClockwise(int current_hash);
     std::vector<std::string> node_ids_being_deleted_;
     std::atomic<bool> stopServer;
     ConnectionPool connection_pool;
