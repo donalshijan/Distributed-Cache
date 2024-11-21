@@ -140,9 +140,24 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
         return std::string(buffer, bytes_received);
     }
 
+    NodeConnectionDetails& Cache::findNodeForKey(const std::string& key) {
+        int key_hash = hasher_(key);
+        auto it = hash_ring_.lower_bound(key_hash);
+
+        if (it == hash_ring_.end()) {
+            // Wrap around to the first node
+            it = hash_ring_.begin();
+        }
+
+        return it->second;
+    }
+
     void Cache::addNode(const NodeConnectionDetails& node_connection_details) {
         std::lock_guard<std::mutex> lock(mutex_);
-        //after migration completes
+        for (int i = 0; i < virtual_nodes_count_; ++i) {
+            int hash = hasher_(node_connection_details.node_id + std::to_string(i));
+            hash_ring_[hash] = node_connection_details;
+        }
         nodes_.push_back(node_connection_details);
     }
 
@@ -158,18 +173,15 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
         if (it != nodes_.end()) {
             NodeConnectionDetails node_to_remove = *it;
 
-            // Collect node IDs to migrate data to
-            std::vector<std::string> target_node_ids;
-            for (const auto& node : nodes_) {
-                if (node.node_id != node_id) {
-                    target_node_ids.push_back(node.node_id);
-                }
+            for (int i = 0; i < virtual_nodes_count_; ++i) {
+                int hash = hasher_(node_id + std::to_string(i));
+                hash_ring_.erase(hash);
             }
 
             // Send migration message to the target nodes
-            migrateData(node_to_remove.node_id, target_node_ids);
+            migrateData(node_to_remove.node_id);
 
-            node_id_being_deleted_ = node_to_remove.node_id;
+            node_ids_being_deleted_.push_back(node_to_remove.node_id);
 
             // Erase the node from the vector
             nodes_.erase(it, nodes_.end());
@@ -178,7 +190,7 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
         }
     }
 
-    void Cache::migrateData(const std::string& node_id, const std::vector<std::string>& target_node_ids) {
+    void Cache::migrateData(const std::string& node_id) {
     // Find the node with the matching node_id
         auto it = std::find_if(nodes_.begin(), nodes_.end(),
             [&node_id](const NodeConnectionDetails& node) {
@@ -197,25 +209,14 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
 
             // Add the number of target nodes
             migrate_message << "*";
-            migrate_message << target_node_ids.size() << "\r\n";
+            // migrate_message << target_node_ids.size() << "\r\n";
+            migrate_message << "1" << "\r\n";
 
-            // Add each target node's IP and port
-            for (const auto& target_node_id : target_node_ids) {
-                auto target_it = std::find_if(nodes_.begin(), nodes_.end(),
-                    [&target_node_id](const NodeConnectionDetails& node) {
-                        return node.node_id == target_node_id;
-                    });
+            std::stringstream target_info;
+            target_info << this->ip_ << ":" << this->port_;
+            std::string target_info_str = target_info.str();
 
-                if (target_it != nodes_.end()) {
-                    std::stringstream target_info;
-                    target_info << target_it->ip << ":" << target_it->port;
-                    std::string target_info_str = target_info.str();
-
-                    migrate_message << "$" << target_info_str.size() << "\r\n" << target_info_str << "\r\n";
-                } else {
-                    std::cerr << "[Cache] Warning: Target node with ID " << target_node_id << " not found in nodes list." << std::endl;
-                }
-            }
+            migrate_message << "$" << target_info_str.size() << "\r\n" << target_info_str << "\r\n";
             // Send the MIGRATE message to the node with node_id
             try {
                 // Call the sendToNode method and store the return message.
@@ -231,29 +232,114 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
         } else {
             std::cerr << "[Cache] Error: Node with ID " << node_id << " not found in nodes list." << std::endl;
         }
-}
+    }
+
+    NodeConnectionDetails& Cache::getStartingNode(const std::string& request){
+        // Extract key from the request string
+        size_t pos = 0;
+
+        // Skip the command count prefix, e.g., "*2\r\n"
+        pos = request.find("\r\n");
+
+        if (pos != std::string::npos) {
+            pos += 6; // Move past "\r\n$_\r\n"
+        }
+        pos += 4; // Move past "GET\r\n"
+        // Parse key length
+        size_t key_length_start = request.find("$", pos) + 1;
+        size_t key_length_end = request.find("\r\n", key_length_start);
+        int key_length = std::stoi(request.substr(key_length_start, key_length_end - key_length_start));
+
+        // Extract key
+        pos = key_length_end + 2; // Move past "\r\n"
+        std::string key = request.substr(pos, key_length);
+        return findNodeForKey(key);
+    }
+
+    int Cache::getNextNodeClockwise(int current_hash) {
+        // Ensure nodes are sorted on the ring based on their hash values
+        if (hash_ring_.empty()) {
+            throw std::runtime_error("Hash ring is empty.");
+        }
+
+        // Find the current hash's position in the hash ring
+        auto it = hash_ring_.upper_bound(current_hash);
+
+        // If we've reached the end, wrap around to the beginning
+        if (it == hash_ring_.end()) {
+            it = hash_ring_.begin();
+        }
+
+        // Store the starting iterator to detect when we've wrapped around
+        auto starting_position = it;
+
+        // Iterate clockwise until we find a distinct physical node
+        do {
+            // Check if the current node is distinct from the starting hash
+            if (it->first != current_hash) {
+                return it->first;  // Return the distinct node
+            }
+
+            // Move to the next position, wrapping around if necessary
+            ++it;
+            if (it == hash_ring_.end()) {
+                it = hash_ring_.begin();
+            }
+        } while (it != starting_position);  // Stop if we've wrapped around the entire ring
+
+        return it->first;
+    }
 
     std::string Cache::routeGetRequest(const std::string& request) {
         std::lock_guard<std::mutex> lock(mutex_);
         // Extract key from the request string
-        size_t key_start = request.find("\r\n", 4) + 2;
-        std::string key = request.substr(key_start, request.find("\r\n", key_start) - key_start);
+
+        NodeConnectionDetails search_start_node = getStartingNode(request);
+
+        // Find the hash value of the starting node
+        auto hash_it = std::find_if(hash_ring_.begin(), hash_ring_.end(),
+            [search_start_node](const auto& pair) {
+                return pair.second.node_id == search_start_node.node_id;
+            });
+
+        if (hash_it == hash_ring_.end()) {
+            throw std::runtime_error("Starting node not found in hash ring.");
+        }
+        
+        int current_hash = hash_it->first; // Starting node hash
+
+        int starting_hash = current_hash;
+
 
         // Find the node that holds the key
-        for (const auto& node : nodes_) {
-                std::string response; 
-                try{
-                    response=sendToNode(node.node_id, request);
-                }catch (const std::runtime_error& e) {
-                    std::cerr << "[Cache] Error: " << e.what() << std::endl;
-                    return std::string("Error: ") + e.what();
+        do {
+            auto current_hash_node_pair = std::find_if(hash_ring_.begin(), hash_ring_.end(),
+                [&current_hash](const auto& pair) {
+                    return pair.first == current_hash;
+                });
+                // Check if the iterator is valid
+                if (current_hash_node_pair == hash_ring_.end()) {
+                    throw std::runtime_error("Hash not found in hash ring.");
                 }
-                if (!response.empty() && response[0] == '$') { // Assuming a valid response starts with '$'
-                    if(response!="$-1\r\n"){
-                        return response;
-                    }   
-                }
-        }
+            NodeConnectionDetails current_node = current_hash_node_pair->second;
+            // Try to fetch the key from the current node
+            std::string response;
+            try {
+                response = sendToNode(current_node.node_id, request);
+            } catch (const std::runtime_error& e) {
+                std::cerr << "[Cache] Error: " << e.what() << " on node " << current_node.node_id << std::endl;
+                return std::string("Error: ") + e.what();
+            }
+
+            // Check if a valid response is received (assuming '$' at start indicates valid data)
+            if (!response.empty() && response[0] == '$' && response != "$-1\r\n") {
+                return response;
+            }
+
+            // Move to the next node in a clockwise direction on the ring
+            current_hash = getNextNodeClockwise(current_hash);
+
+        } while (current_hash != starting_hash);  // Continue until we return to the starting node
 
         throw std::runtime_error("Key does not belong to any node in the routing table.");
     }
@@ -266,29 +352,33 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
             return "Failed:No nodes available to route request.";
         }
 
-        // Find the next node that is not being deleted
-        size_t start_node = next_node_;
-        do {
-            const auto& node = nodes_[next_node_];
-            if (node.node_id != node_id_being_deleted_) {
-                // Valid node, proceed with sending request
-                std::string response;
-                try{
-                    response=sendToNode(node.node_id, request);
-                }catch (const std::runtime_error& e) {
-                    std::cerr << "[Cache] Error: " << e.what() << std::endl;
-                    return std::string("Error: ") + e.what();
-                }
-                
-                next_node_ = (next_node_ + 1) % num_nodes;
-                return response; 
-            }
-            // Skip to the next node
-            next_node_ = (next_node_ + 1) % num_nodes;
-        } while (next_node_ != start_node);
+        size_t pos = 0;
 
-        std::cerr << "[Cache] All nodes are currently being deleted or no nodes available." << std::endl;
-        return "Failed:All nodes are currently being deleted or no nodes available.";
+        // Skip the command count prefix, e.g., "*2\r\n"
+        pos = request.find("\r\n");
+
+        if (pos != std::string::npos) {
+            pos += 6; // Move past "\r\n$_\r\n"
+        }
+        pos += 4; // Move past "GET\r\n"
+        // Parse key length
+        size_t key_length_start = request.find("$", pos) + 1;
+        size_t key_length_end = request.find("\r\n", key_length_start);
+        int key_length = std::stoi(request.substr(key_length_start, key_length_end - key_length_start));
+
+        // Extract key
+        pos = key_length_end + 2; // Move past "\r\n"
+        std::string key = request.substr(pos, key_length);
+        NodeConnectionDetails& node = findNodeForKey(key);
+        std::string response;
+
+        try {
+            response = sendToNode(node.node_id, request);
+        } catch (const std::runtime_error& e) {
+            std::cerr << "[Cache] Error: " << e.what() << std::endl;
+            return std::string("Error: ") + e.what();
+        }
+        return response;
     }
 
     std::string Cache::get(const std::string& key){        

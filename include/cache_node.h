@@ -39,12 +39,14 @@ public:
 
     void addNode(const NodeConnectionDetails& node_connection_details);
     void removeNode(const std::string& node_id);
-    void migrateData(const std::string& node_id, const std::vector<std::string>& target_nodes);
+    void migrateData(const std::string& node_id);
     std::string getClusterId() const;
 
     std::string routeGetRequest(const std::string& request);
+    void routeGetRequestsInBuffer(const std::string& starting_node_id);
     std::string routeSetRequest(const std::string& request);
     std::string get(const std::string& key);
+    std::string getKey(const std::string& key);
     std::string set(const std::string& key, const std::string& value);
     
     void startCacheServer();
@@ -55,12 +57,20 @@ public:
 private:
     int wakeup_pipe[2]; // Create a pipe for waking up the kqueue
     std::vector<NodeConnectionDetails> nodes_;
+    std::map<int, NodeConnectionDetails> hash_ring_;
+    std::hash<std::string> hasher_; // For consistent hashing
+    int virtual_nodes_count_ = 3;    // Number of virtual nodes per node, adjust as needed
     size_t next_node_ = 0;
     std::mutex mutex_;
     std::string cluster_id_;
     std::string ip_;
     int port_;
-    std::string node_id_being_deleted_;
+    NodeConnectionDetails& getStartingNode(const std::string& request);
+    NodeConnectionDetails& findNodeForKey(const std::string& key);
+    void addRequestToBuffer(const std::string& request);
+    int getNextNodeClockwiseForMultiplexing(int current_hash);
+    int getNextNodeClockwise(int current_hash);
+    std::vector<std::string> node_ids_being_deleted_;
     std::atomic<bool> stopServer;
     ConnectionPool connection_pool;
     // Helper function to send data over TCP/IP
