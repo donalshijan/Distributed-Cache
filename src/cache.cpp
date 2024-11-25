@@ -765,21 +765,14 @@ void accept_connections(Cache* cache, int kq_client, std::vector<int> unix_socke
     }
 }
 
-
-void handle_client_connections(int kq, Cache* cache,int wakeup_pipe[2]) {
-    struct timespec timeout;
-    timeout.tv_sec = 1;  // 1 second timeout
-    timeout.tv_nsec = 0;
-    struct kevent event;
-    struct kevent events[10];
-    while (!cache->isServerStopped()) {
+void Cache::process_buffers() {
+    while (!this->isServerStopped()) {
 
         // Check for buffers ready to process
         {
-            std::unique_lock<std::mutex> lock(buffer_mutex);
-            auto now = std::chrono::steady_clock::now();
-
             for (auto it = buffer_map.begin(); it != buffer_map.end();) {
+                std::unique_lock<std::mutex> lock(buffer_mutex);
+                auto now = std::chrono::steady_clock::now();
                 auto current_entry = *it;
                 auto& [starting_node_id, buffer_tuple] = current_entry;
                 auto& [buffer_string, first_entry_time, request_count] = buffer_tuple;
@@ -790,7 +783,7 @@ void handle_client_connections(int kq, Cache* cache,int wakeup_pipe[2]) {
                     (std::chrono::duration_cast<std::chrono::microseconds>(now - first_entry_time).count() >= 0 && request_count>0)) {
                     it = buffer_map.erase(it);
                     lock.unlock();
-                    cache->routeGetRequestsInBuffer(starting_node_id,buffer_string);
+                    this->routeGetRequestsInBuffer(starting_node_id,buffer_string);
                     lock.lock();
                 }
                  else {
@@ -798,6 +791,16 @@ void handle_client_connections(int kq, Cache* cache,int wakeup_pipe[2]) {
                 }
             }
         }
+    }
+}
+
+void handle_client_connections(int kq, Cache* cache,int wakeup_pipe[2]) {
+    struct timespec timeout;
+    timeout.tv_sec = 1;  // 1 second timeout
+    timeout.tv_nsec = 0;
+    struct kevent event;
+    struct kevent events[10];
+    while (!cache->isServerStopped()) {
 
         int nev = kevent(kq, NULL, 0, events, 10, NULL);  // Wait for read events
         if (nev == -1) {
@@ -1124,12 +1127,16 @@ EV_SET(&event, wakeup_pipe[0], EVFILT_READ, EV_ADD, 0, 0, NULL);
     std::thread clientEventThread([this, kq_client] {
     handle_client_connections(kq_client,this,this->wakeup_pipe);
 });
+    std::thread process_buffers_thread([this] {
+    process_buffers();
+});
     std::cout<<"[Cache] Cluster Manager is Active for Cluster ID: "<<this->cluster_id_<< std::endl;
     std::cout << "[Cache] Cache server started and listening on " << ip_ << ":" << port_ << std::endl;
 
 // Join threads when shutting down
     acceptThread.join();
     clientEventThread.join();
+    process_buffers_thread.join();
     cleanup_kqueue(kq_client);
     close(kq_client); 
     std::cout << "[Cache] Server Shutting down..." << std::endl;

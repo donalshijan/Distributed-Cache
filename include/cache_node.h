@@ -75,6 +75,7 @@ private:
     // Helper function to send data over TCP/IP
     std::string sendToNode(const std::string& node_id, const std::string& request);
     void handle_client(int new_socket);
+    void process_buffers();
     void startCacheServer_(std::vector<int> unix_sockets);
 };
 
