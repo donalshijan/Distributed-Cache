@@ -399,27 +399,51 @@ std::string CacheNode::processRequest(const std::string& request) {
         return "+OK MIGRATION COMPLETED\r\n";
     }
     else if (request.substr(pos, 3) == "GET") {
-        pos += 4; // Move past "GET\r\n"
 
-        // Parse key length
-        size_t key_length_start = request.find("$", pos) + 1;
-        size_t key_length_end = request.find("\r\n", key_length_start);
-        int key_length = std::stoi(request.substr(key_length_start, key_length_end - key_length_start));
+        std::string overall_response;
+        size_t pos = 0;
+        while (pos < request.size()) {
+            // Find the start of the current request
+            size_t request_start = request.find("*", pos);
+            if (request_start == std::string::npos) break; // No more requests
 
-        // Extract key
-        pos = key_length_end + 2; // Move past "\r\n"
-        std::string key = request.substr(pos, key_length);
-        
-        pos += key_length + 2; // Move past key and "\r\n"
-        std::string value = get(key);
-        // Check if the value is empty
-        if (value.empty()) {
-            // Return Redis-like nil response
-            return "$-1\r\n";
-        } else {
-            // Return Redis-like bulk string with value size
-            return "$" + std::to_string(value.size()) + "\r\n" + value + "\r\n";
+            // Find the start of the next request
+            size_t next_request_start = request.find("*", request_start + 1);
+            std::string current_request;
+
+            if (next_request_start != std::string::npos) {
+                // Extract the current request substring
+                current_request = request.substr(request_start, next_request_start - request_start);
+                pos = next_request_start; // Update position to the next request
+            } else {
+                // Last request in the stream
+                current_request = request.substr(request_start);
+                pos = request.size(); // Move position to the end
+            }
+            // Parse key length and key from the current request
+            size_t key_length_start = current_request.find("$",current_request.find("GET",8)+4) + 1;
+            if (key_length_start == std::string::npos) continue;
+
+            size_t key_length_end = current_request.find("\r\n", key_length_start);
+            if (key_length_end == std::string::npos) continue;
+
+            int key_length = std::stoi(current_request.substr(key_length_start, key_length_end - key_length_start));
+            size_t key_start = key_length_end + 2; // Move past "\r\n"
+            if (key_start + key_length > current_request.size()) continue;
+
+            std::string key = current_request.substr(key_start, key_length);
+            // Get the value from the cache
+            std::string value = get(key);
+            overall_response += current_request;
+            // Construct the response for the current request
+            if (value.empty()) {
+                overall_response += "#$-1\r\n#"; // Redis-like nil response
+            } else {
+                overall_response += "#$" + std::to_string(value.size()) + "\r\n" + value + "\r\n#";
+            }
         }
+
+        return overall_response;
 
     } else if (request.substr(pos, 3) == "SET") {
         // Process SET request here (code provided earlier)

@@ -43,10 +43,9 @@ public:
     std::string getClusterId() const;
 
     std::string routeGetRequest(const std::string& request);
-    void routeGetRequestsInBuffer(const std::string& starting_node_id);
+    void routeGetRequestsInBuffer(const std::string& starting_node_id,std::string buffer_string);
     std::string routeSetRequest(const std::string& request);
     std::string get(const std::string& key);
-    std::string getKey(const std::string& key);
     std::string set(const std::string& key, const std::string& value);
     
     void startCacheServer();
@@ -68,7 +67,7 @@ private:
     NodeConnectionDetails& getStartingNode(const std::string& request);
     NodeConnectionDetails& findNodeForKey(const std::string& key);
     void addRequestToBuffer(const std::string& request);
-    int getNextNodeClockwiseForMultiplexing(int current_hash);
+    void addRequestToUnitTestBuffer(const std::string& request);
     int getNextNodeClockwise(int current_hash);
     std::vector<std::string> node_ids_being_deleted_;
     std::atomic<bool> stopServer;

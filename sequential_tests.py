@@ -6,6 +6,7 @@ import argparse
 import threading
 import sys
 from progress_bar import ProgressBar  # Import the ProgressBar class
+import select
 
 # Helper function to send TCP request to the cache server
 def send_request(message, ip, port):
@@ -14,6 +15,21 @@ def send_request(message, ip, port):
         s.sendall(message.encode())
         response = s.recv(1024)
     return response.decode()
+
+# Function to send requests in a separate thread
+def send_get_requests(ip, port, key_value_pairs, sockets, request_times, lock,number_of_requests_sent,socket_key_map ):
+    for key in key_value_pairs.keys():
+        message = construct_get_message(key)
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((ip, port))
+        s.sendall(message.encode())
+        time.sleep(0.000010)
+        # Thread-safe addition to shared resources
+        with lock:
+            sockets.append(s)
+            request_times[s] = time.time()  # Track the start time for this socket
+            socket_key_map[s] = key 
+            number_of_requests_sent[0] += 1  # Increment the count of requests sent
 
 # Construct GET request for the cache
 def construct_get_message(key):
@@ -46,6 +62,146 @@ def set_test(ip, port, key_value_pairs, progress_bar):
     progress_bar.stop()  # Stop the progress bar after completion
     print("\nSET requests completed.")
 
+# Function to monitor responses in a separate thread
+def monitor_responses(sockets, request_times, key_value_pairs, progress_bar, total_keys, log_file, lock,number_of_requests_sent,socket_key_map):
+    total_time = 0
+    valid_responses_count = 0
+    while True:
+        with lock:
+            active_sockets = list(sockets)  # Create a snapshot of current sockets
+            all_requests_fired = number_of_requests_sent[0] == len(key_value_pairs)  # Check if all requests are fired
+        if not active_sockets and all_requests_fired:
+            break  # Exit when there are no more sockets to monitor
+        
+        if active_sockets:
+            readable, _, _ = select.select(active_sockets, [], [], None)  # Timeout of 1 second
+
+            for s in readable:
+                response = s.recv(1024).decode()
+                end_time = time.time()
+
+                with lock:
+                    duration = end_time - request_times[s]
+                    key = socket_key_map[s]
+
+                    # Log response and duration
+                    log_file.write(f"\nRetrieved {key} in {duration:.6f} seconds")
+                    log_file.write(f" Response: {response.strip()}")
+
+                    # Check if the response is valid (starts with "$")
+                    if response.strip().startswith("$"):
+                        total_time += duration
+                        valid_responses_count += 1
+
+                    # Close the socket and remove it from shared resources
+                    s.close()
+                    sockets.remove(s)
+
+                    # Update progress bar
+                    progress_bar.update(number_of_requests_sent[0])
+
+    
+    time.sleep(0.1)  
+    progress_bar.stop()  # Stop the progress bar after completion
+    print("\nGET requests completed.")
+    # Calculate and log results
+    if valid_responses_count > 0:
+        average_time = total_time / valid_responses_count
+        result_message = f"Average retrieval time for valid responses: {average_time:.6f} seconds"
+        print(result_message)
+    else:
+        print("No valid responses received.")
+        result_message = f"No valid responses received during sequential tests."
+
+    with open("results.txt", "a") as result_log:
+        result_log.write(result_message + "\n")
+    
+
+
+# Main function to manage threads
+def sequential_get_test_multiplexing(ip, port, key_value_pairs, progress_bar):
+    total_keys = len(key_value_pairs)
+    sockets = []
+    request_times = {}
+    socket_key_maps = {}
+    lock = threading.Lock()  # For thread-safe access to shared resources
+    number_of_requests_sent = [0]  # Use a list to allow updates across threads (mutable shared variable)
+
+    with open("sequential_test_logs.log", "a") as log_file:
+        # Create and start threads
+        sender_thread = threading.Thread(target=send_get_requests, args=(ip, port, key_value_pairs, sockets, request_times, lock,number_of_requests_sent,socket_key_maps))
+        monitor_thread = threading.Thread(target=monitor_responses, args=(sockets, request_times, key_value_pairs, progress_bar, total_keys, log_file, lock,number_of_requests_sent,socket_key_maps))
+
+        sender_thread.start()
+        monitor_thread.start()
+
+        # Wait for threads to finish
+        sender_thread.join()
+        monitor_thread.join()
+        
+        
+def sequential_get_test_multiplexing2(ip, port, key_value_pairs, progress_bar,):
+    total_keys = len(key_value_pairs)
+    total_time = 0
+    valid_responses_count = 0  # Track the number of valid responses
+
+    sockets = []
+    responses = {}
+    request_times = {}
+    socket_key_map = {}
+    
+    with open("sequential_test_logs.log", "a") as log_file:
+        # Step 1: Send all requests and store sockets
+        for key in key_value_pairs.keys():
+            message = construct_get_message(key)
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect((ip, port))
+            s.sendall(message.encode())
+
+            sockets.append(s)
+            request_times[s] = time.time()  # Track the start time for this socket
+            socket_key_map[s] = key
+        # Step 2: Monitor sockets for responses
+        while sockets:
+            readable, _, _ = select.select(sockets, [], [], None)  # Timeout of 1 second
+
+            for s in readable:
+                response = s.recv(1024).decode()
+                end_time = time.time()
+                duration = end_time - request_times[s]
+                key = socket_key_map[s]
+
+                log_file.write(f"\nRetrieved {key} in {duration:.6f} seconds")
+                log_file.write(f"Response: {response.strip()}")
+
+                # Check if the response is valid (starts with "$")
+                if response.strip().startswith("$"):
+                    total_time += duration
+                    valid_responses_count += 1  # Increment valid response count
+
+                # Close socket and remove from list
+                s.close()
+                sockets.remove(s)
+
+                # Update progress bar
+                progress_bar.update(total_keys - len(sockets))
+
+        time.sleep(0.2)
+        progress_bar.stop()  # Stop the progress bar after completion
+        print("\nGET requests completed.")
+
+        # Step 3: Calculate and log results
+        if valid_responses_count > 0:
+            average_time = total_time / valid_responses_count
+            result_message = f"Average retrieval time for valid responses: {average_time:.6f} seconds"
+            print(result_message)
+        else:
+            print("No valid responses received.")
+            result_message = f"No valid responses received during sequential tests."
+
+        with open("results.txt", "a") as result_log:
+            result_log.write(result_message + "\n")
+            
 # Sequential GET test for previously set keys
 def sequential_get_test(ip, port, key_value_pairs, progress_bar):
     total_keys = len(key_value_pairs)
@@ -54,7 +210,6 @@ def sequential_get_test(ip, port, key_value_pairs, progress_bar):
     with open("sequential_test_logs.log", "a") as log_file:
         for index, key in enumerate(key_value_pairs.keys()):
             message = construct_get_message(key)
-            
             start_time = time.time()
             response = send_request(message, ip, port)
             end_time = time.time()
@@ -129,7 +284,7 @@ if __name__ == "__main__":
     # Perform GET requests after setting the values
     print("\nStarting GET requests...")
     progress_thread_get.start()
-    sequential_get_test(cache_server_ip, cache_server_port, key_value_pairs, progress_bar_get)
+    sequential_get_test_multiplexing(cache_server_ip, cache_server_port, key_value_pairs, progress_bar_get)
     
     # Wait for the progress thread to finish
     progress_thread_get.join()

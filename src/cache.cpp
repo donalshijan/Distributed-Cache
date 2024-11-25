@@ -27,7 +27,18 @@
 #include <sys/sysctl.h>
 #include <netinet/tcp.h>
 #include "connection_pool.h"
+#include <chrono>
+#include <map>
+#include <iomanip>
+#include <ctime>
 
+std::map<std::string, std::tuple<std::string, std::chrono::steady_clock::time_point, int>> buffer_map;
+std::mutex buffer_mutex; // To ensure thread safety
+
+std::map<std::string, std::tuple<std::string, std::chrono::steady_clock::time_point, int>> unit_test_buffer_map;
+std::mutex unit_test_buffer_mutex; // To ensure thread safety
+
+std::unordered_map<std::string, int> socket_map;
 
 Cache::Cache(const std::string& ip, const int& port) : ip_(ip), port_(port), connection_pool(){
         boost::uuids::uuid uuid = boost::uuids::random_generator()();
@@ -234,6 +245,41 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
         }
     }
 
+    int Cache::getNextNodeClockwise(int current_hash) {
+    // Ensure nodes are sorted on the ring based on their hash values
+    if (hash_ring_.empty()) {
+        throw std::runtime_error("Hash ring is empty.");
+    }
+
+    // Find the current hash's position in the hash ring
+    auto it = hash_ring_.upper_bound(current_hash);
+
+    // If we've reached the end, wrap around to the beginning
+    if (it == hash_ring_.end()) {
+        it = hash_ring_.begin();
+    }
+
+    // Store the starting iterator to detect when we've wrapped around
+    auto starting_position = it;
+
+    // Iterate clockwise until we find a distinct physical node
+    do {
+        // Check if the current node is distinct from the starting hash
+        if (it->first != current_hash) {
+            return it->first;  // Return the distinct node
+        }
+
+        // Move to the next position, wrapping around if necessary
+        ++it;
+        if (it == hash_ring_.end()) {
+            it = hash_ring_.begin();
+        }
+    } while (it != starting_position);  // Stop if we've wrapped around the entire ring
+
+    return it->first;
+}
+
+
     NodeConnectionDetails& Cache::getStartingNode(const std::string& request){
         // Extract key from the request string
         size_t pos = 0;
@@ -256,64 +302,65 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
         return findNodeForKey(key);
     }
 
-    int Cache::getNextNodeClockwise(int current_hash) {
-        // Ensure nodes are sorted on the ring based on their hash values
-        if (hash_ring_.empty()) {
-            throw std::runtime_error("Hash ring is empty.");
+    void Cache::addRequestToBuffer(const std::string& request) {
+        std::lock_guard<std::mutex> lock(buffer_mutex);
+        // Find the starting node ID for the request
+        std::string starting_node_id = getStartingNode(request).node_id;
+        // Check if the node's buffer exists
+        auto& buffer_entry = buffer_map[starting_node_id];
+        auto& buffer_string = std::get<0>(buffer_entry);
+        auto& first_entry_time = std::get<1>(buffer_entry);
+        auto& request_count = std::get<2>(buffer_entry);
+
+        // Append the request to the buffer
+        buffer_string += request;
+        // If it's the first entry, record the time
+        if (request_count == 0) {
+            first_entry_time = std::chrono::steady_clock::now();
         }
 
-        // Find the current hash's position in the hash ring
-        auto it = hash_ring_.upper_bound(current_hash);
-
-        // If we've reached the end, wrap around to the beginning
-        if (it == hash_ring_.end()) {
-            it = hash_ring_.begin();
-        }
-
-        // Store the starting iterator to detect when we've wrapped around
-        auto starting_position = it;
-
-        // Iterate clockwise until we find a distinct physical node
-        do {
-            // Check if the current node is distinct from the starting hash
-            if (it->first != current_hash) {
-                return it->first;  // Return the distinct node
-            }
-
-            // Move to the next position, wrapping around if necessary
-            ++it;
-            if (it == hash_ring_.end()) {
-                it = hash_ring_.begin();
-            }
-        } while (it != starting_position);  // Stop if we've wrapped around the entire ring
-
-        return it->first;
+        // Update the request count
+        request_count++;
     }
 
-    std::string Cache::routeGetRequest(const std::string& request) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        // Extract key from the request string
+    void Cache::addRequestToUnitTestBuffer(const std::string& request) {
+        std::lock_guard<std::mutex> lock(unit_test_buffer_mutex);
+        // Find the starting node ID for the request
+        std::string starting_node_id = getStartingNode(request).node_id;
+        // Check if the node's buffer exists
+        auto& buffer_entry = unit_test_buffer_map[starting_node_id];
+        auto& buffer_string = std::get<0>(buffer_entry);
+        auto& first_entry_time = std::get<1>(buffer_entry);
+        auto& request_count = std::get<2>(buffer_entry);
 
-        NodeConnectionDetails search_start_node = getStartingNode(request);
-
-        // Find the hash value of the starting node
-        auto hash_it = std::find_if(hash_ring_.begin(), hash_ring_.end(),
-            [search_start_node](const auto& pair) {
-                return pair.second.node_id == search_start_node.node_id;
-            });
-
-        if (hash_it == hash_ring_.end()) {
-            throw std::runtime_error("Starting node not found in hash ring.");
+        // Append the request to the buffer
+        buffer_string += request;
+        // If it's the first entry, record the time
+        if (request_count == 0) {
+            first_entry_time = std::chrono::steady_clock::now();
         }
-        
-        int current_hash = hash_it->first; // Starting node hash
 
-        int starting_hash = current_hash;
+        // Update the request count
+        request_count++;
+    }
 
+    void Cache::routeGetRequestsInBuffer(const std::string& starting_node_id, std::string buffer_string) {
 
-        // Find the node that holds the key
-        do {
-            auto current_hash_node_pair = std::find_if(hash_ring_.begin(), hash_ring_.end(),
+            auto hash_it = std::find_if(hash_ring_.begin(), hash_ring_.end(),
+                [&starting_node_id](const auto& pair) {
+                    return pair.second.node_id == starting_node_id;
+                });
+
+            if (hash_it == hash_ring_.end()) {
+                throw std::runtime_error("Key does not belong to any node in the routing table.");
+            }
+
+            int current_hash = hash_it->first; // Starting node hash
+
+            int starting_hash = current_hash;
+             // Find the node that holds the key
+            do {
+                auto current_hash_node_pair = std::find_if(hash_ring_.begin(), hash_ring_.end(),
                 [&current_hash](const auto& pair) {
                     return pair.first == current_hash;
                 });
@@ -321,27 +368,213 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
                 if (current_hash_node_pair == hash_ring_.end()) {
                     throw std::runtime_error("Hash not found in hash ring.");
                 }
-            NodeConnectionDetails current_node = current_hash_node_pair->second;
-            // Try to fetch the key from the current node
-            std::string response;
-            try {
-                response = sendToNode(current_node.node_id, request);
-            } catch (const std::runtime_error& e) {
-                std::cerr << "[Cache] Error: " << e.what() << " on node " << current_node.node_id << std::endl;
-                return std::string("Error: ") + e.what();
+                NodeConnectionDetails current_node = current_hash_node_pair->second;
+                std::string new_buffer_string;
+                // Try to fetch the key from the current node
+                std::string response;
+                try {
+                    response = sendToNode(current_node.node_id, buffer_string);
+                } catch (const std::runtime_error& e) {
+                    std::cerr << "[Cache] Error: " << e.what() << " on node " << current_node.node_id << std::endl;
+                }
+                size_t pos = 0;
+                while (pos < response.size()) {
+                    // Extract the substring for this request-response pair
+                    size_t next_star = response.find('*', pos + 1);
+                    std::string req_resp_substr;
+                    if (next_star == std::string::npos) {
+                        // If this is the last pair, take from pos to the end of the string
+                        req_resp_substr = response.substr(pos);
+                    } else {
+                        // Otherwise, take from pos to next_star
+                        req_resp_substr = response.substr(pos, next_star - pos);
+                    }
+                    // Check for valid response
+                    size_t first_hash = req_resp_substr.find('#');
+                    if (first_hash != std::string::npos) {
+                        size_t second_hash = req_resp_substr.find('#', first_hash + 1);
+                        std::string response_value = req_resp_substr.substr(first_hash + 1, second_hash - first_hash - 1);
+                        if (response_value == "$-1\r\n") {
+                            // Invalid response, add to new buffer string
+                            std::string original_request = req_resp_substr.substr(0, first_hash);
+                            new_buffer_string += original_request;
+                        } else {
+                            // Valid response, send to client
+                            size_t socket_start = req_resp_substr.find('{');
+                            size_t socket_end = req_resp_substr.find('}', socket_start);
+                            if (socket_start != std::string::npos && socket_end != std::string::npos) {
+                                std::string socket_id_str = req_resp_substr.substr(socket_start + 1, socket_end - socket_start - 1);
+                                auto it = socket_map.find(socket_id_str);
+                                int socket_id = it->second;
+                                // Send the response back to the client
+                                ssize_t total_sent = 0;
+                                ssize_t bytes_to_send = response_value.size();
+                                const char* data = response_value.c_str();
+
+                                while (total_sent < bytes_to_send) {
+                                    ssize_t sent = send(socket_id, data + total_sent, bytes_to_send - total_sent, 0);
+                                    
+                                    if (sent < 0) {
+                                        if (errno == EINTR) {
+                                            std::cerr << "[LOG] Send interrupted by signal. Retrying..." << std::endl;
+                                            continue;  // Interrupted by a signal, retry
+                                        }
+                                        else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                                            // Socket temporarily unavailable, wait and retry
+                                            std::cerr << "[LOG] Socket temporarily unavailable. Retrying after brief sleep..." << std::endl;
+                                            usleep(1000);  // sleep briefly and retry
+                                            continue;
+                                        }
+                                        else {
+                                            std::cerr << "Send failed: " << strerror(errno) << " (errno: " << errno << ")" << std::endl;
+                                            // Some other error occurred
+                                            throw std::runtime_error("Send failed");
+                                        }
+                                    }
+                                    total_sent += sent;
+                                }
+                                #ifdef PRODUCTION
+                                close(socket_id); // Close connection after handling
+                                #endif
+                            }
+                        }
+                    }
+
+                    // Move to the next request-response substring
+                    if (next_star == std::string::npos) {
+                        break; // End of the response string
+                    }
+                    pos = next_star;
+                }
+                // Update buffer_string in buffer_map for the next iteration
+                buffer_string = new_buffer_string;
+                // Move to the next node in a clockwise direction on the ring
+                current_hash = getNextNodeClockwise(current_hash);
+            } while (!buffer_string.empty() && current_hash != starting_hash);  // Continue until we return to the starting node
+            // Handle remaining requests in the buffer
+            size_t pos = 0;
+            while (pos < buffer_string.size()) {
+                size_t next_star = buffer_string.find('*', pos + 1);
+                std::string req_resp_substr;
+                if (next_star == std::string::npos) {
+                    req_resp_substr = buffer_string.substr(pos);
+                } else {
+                    req_resp_substr = buffer_string.substr(pos, next_star - pos);
+                }
+
+                size_t socket_start = req_resp_substr.find('{');
+                size_t socket_end = req_resp_substr.find('}', socket_start);
+                if (socket_start != std::string::npos && socket_end != std::string::npos) {
+                    std::string socket_id_str = req_resp_substr.substr(socket_start + 1, socket_end - socket_start - 1);
+                    int socket_id = std::stoi(socket_id_str);
+
+                    std::string error_message = "-ERR: Key does not belong to any node in the routing table.";
+                    send(socket_id, error_message.c_str(), error_message.size(), 0);
+                    #ifdef PRODUCTION
+                    close(socket_id);
+                    #endif
+                }
+
+                if (next_star == std::string::npos) {
+                    break;
+                }
+                pos = next_star;
+            }
+    }
+
+    std::string Cache::routeGetRequest(const std::string& request) {
+        addRequestToUnitTestBuffer(request);
+        std::lock_guard<std::mutex> lock(unit_test_buffer_mutex);
+        std::string starting_node_id = getStartingNode(request).node_id;
+        std::string responseToReturn = "";
+        auto it = unit_test_buffer_map.find(starting_node_id);
+        if (it != unit_test_buffer_map.end()) {
+            auto& [buffer_string, first_entry_time, request_count] = it->second;
+            // Locate the NodeConnectionDetails pointer in the nodes_ vector
+
+            // Find the hash value of the starting node
+            auto hash_it = std::find_if(hash_ring_.begin(), hash_ring_.end(),
+                [&starting_node_id](const auto& pair) {
+                    return pair.second.node_id == starting_node_id;
+                });
+
+            if (hash_it == hash_ring_.end()) {
+                throw std::runtime_error("Key does not belong to any node in the routing table.");
             }
 
-            // Check if a valid response is received (assuming '$' at start indicates valid data)
-            if (!response.empty() && response[0] == '$' && response != "$-1\r\n") {
-                return response;
+            int current_hash = hash_it->first; // Starting node hash
+
+            int starting_hash = current_hash;
+            // std::cout<<"starting search for buffer request"<<std::endl;
+             // Find the node that holds the key
+            do {
+                auto current_hash_node_pair = std::find_if(hash_ring_.begin(), hash_ring_.end(),
+                [&current_hash](const auto& pair) {
+                    return pair.first == current_hash;
+                });
+                // Check if the iterator is valid
+                if (current_hash_node_pair == hash_ring_.end()) {
+                    throw std::runtime_error("Hash not found in hash ring.");
+                }
+                NodeConnectionDetails current_node = current_hash_node_pair->second;
+                std::string new_buffer_string;
+                // Try to fetch the key from the current node
+                std::string response;
+                try {
+                    response = sendToNode(current_node.node_id, buffer_string);
+                } catch (const std::runtime_error& e) {
+                    std::cerr << "[Cache] Error: " << e.what() << " on node " << current_node.node_id << std::endl;
+                    // return "Error: " + std::string(e.what());
+                }
+                size_t pos = 0;
+                while (pos < response.size()) {
+                    // Extract the substring for this request-response pair
+                    size_t next_star = response.find('*', pos + 1);
+                    std::string req_resp_substr;
+                    if (next_star == std::string::npos) {
+                        // If this is the last pair, take from pos to the end of the string
+                        req_resp_substr = response.substr(pos);
+                    } else {
+                        // Otherwise, take from pos to next_star
+                        req_resp_substr = response.substr(pos, next_star - pos);
+                    }
+                    // Check for valid response
+                    size_t first_hash = req_resp_substr.find('#');
+                    if (first_hash != std::string::npos) {
+                        size_t second_hash = req_resp_substr.find('#', first_hash + 1);
+                        std::string response_value = req_resp_substr.substr(first_hash + 1, second_hash - first_hash - 1);
+                        if (response_value == "$-1\r\n") {
+                            // Invalid response, add to new buffer string
+                            std::string original_request = req_resp_substr.substr(0, first_hash);
+                            new_buffer_string += original_request;
+                        } else {
+                            responseToReturn += response_value;
+                        }
+                    }
+
+                    // Move to the next request-response substring
+                    if (next_star == std::string::npos) {
+                        break; // End of the response string
+                    }
+                    pos = next_star;
+                }
+                // Update buffer_string in buffer_map for the next iteration
+                buffer_string = new_buffer_string;
+                // Move to the next node in a clockwise direction on the ring
+                current_hash = getNextNodeClockwise(current_hash);
+            } while (!buffer_string.empty() && current_hash != starting_hash);  // Continue until we return to the starting node
+            // std::cout<<"GOTOUT"<<std::endl;
+            // Handle remaining requests in the buffer
+            if(!buffer_string.empty()){
+                throw std::runtime_error("Key does not belong to any node in the routing table.");
             }
 
-            // Move to the next node in a clockwise direction on the ring
-            current_hash = getNextNodeClockwise(current_hash);
-
-        } while (current_hash != starting_hash);  // Continue until we return to the starting node
-
-        throw std::runtime_error("Key does not belong to any node in the routing table.");
+            // Reset the buffer
+            buffer_string.clear();
+            first_entry_time = std::chrono::steady_clock::now(); 
+            request_count = 0;
+        }
+        return responseToReturn;
     }
 
     std::string Cache::routeSetRequest(const std::string& request) {
@@ -540,7 +773,32 @@ void handle_client_connections(int kq, Cache* cache,int wakeup_pipe[2]) {
     struct kevent event;
     struct kevent events[10];
     while (!cache->isServerStopped()) {
-        // std::cout << "[Cache] handle connections running "<< "Process ID: " << getpid() << ", Thread ID: " << std::this_thread::get_id() << std::endl;
+
+        // Check for buffers ready to process
+        {
+            std::unique_lock<std::mutex> lock(buffer_mutex);
+            auto now = std::chrono::steady_clock::now();
+
+            for (auto it = buffer_map.begin(); it != buffer_map.end();) {
+                auto current_entry = *it;
+                auto& [starting_node_id, buffer_tuple] = current_entry;
+                auto& [buffer_string, first_entry_time, request_count] = buffer_tuple;
+                // std::cout<<"request_count"<<request_count<<std::endl;
+                // std::cout<<"duration "<<std::chrono::duration_cast<std::chrono::microseconds>(now - first_entry_time).count()<<std::endl;
+                // Process if buffer conditions are met
+                if (request_count >= 0 || 
+                    (std::chrono::duration_cast<std::chrono::microseconds>(now - first_entry_time).count() >= 0 && request_count>0)) {
+                    it = buffer_map.erase(it);
+                    lock.unlock();
+                    cache->routeGetRequestsInBuffer(starting_node_id,buffer_string);
+                    lock.lock();
+                }
+                 else {
+                    ++it; // Only increment if the current entry is not erased
+                }
+            }
+        }
+
         int nev = kevent(kq, NULL, 0, events, 10, NULL);  // Wait for read events
         if (nev == -1) {
             std::cerr << "[Cache] Error with kevent (client event loop): " << strerror(errno) << std::endl;
@@ -936,12 +1194,14 @@ void Cache::handle_client(int new_socket){
             return;
         }
         if (request.substr(pos, 3) == "GET") {
-            
-            try {
-                response = routeGetRequest(request);
-            } catch (const std::runtime_error& e) {
-                response = std::string("-ERR: ") + e.what();
-            }
+            request += "{";
+            request += std::to_string(new_socket);
+            request += "}";
+            request += "\r\n";
+            std::string socket_id_str= std::to_string(new_socket);
+            socket_map[socket_id_str] = new_socket;
+            addRequestToBuffer(request);
+            return; // Don't process immediately
 
         } else if (request.substr(pos, 3) == "SET") {
 
