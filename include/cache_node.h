@@ -67,7 +67,7 @@ private:
     NodeConnectionDetails& getStartingNode(const std::string& request);
     NodeConnectionDetails& findNodeForKey(const std::string& key);
     void addRequestToBuffer(const std::string& request);
-    void addRequestToUnitTestBuffer(const std::string& request);
+    void addRequestToTestBuffer(const std::string& request);
     int getNextNodeClockwise(int current_hash);
     std::vector<std::string> node_ids_being_deleted_;
     std::atomic<bool> stopServer;

@@ -32,11 +32,9 @@
 #include <iomanip>
 #include <ctime>
 
-std::map<std::string, std::tuple<std::string, std::chrono::steady_clock::time_point, int>> buffer_map;
-std::mutex buffer_mutex; // To ensure thread safety
+std::map<std::string, std::tuple<std::mutex,std::string, std::chrono::steady_clock::time_point, int>> buffer_map;
 
-std::map<std::string, std::tuple<std::string, std::chrono::steady_clock::time_point, int>> unit_test_buffer_map;
-std::mutex unit_test_buffer_mutex; // To ensure thread safety
+std::map<std::string, std::tuple<std::mutex,std::string, std::chrono::steady_clock::time_point, int>> test_buffer_map;
 
 std::unordered_map<std::string, int> socket_map;
 
@@ -303,15 +301,16 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
     }
 
     void Cache::addRequestToBuffer(const std::string& request) {
-        std::lock_guard<std::mutex> lock(buffer_mutex);
+        // std::lock_guard<std::mutex> lock(buffer_mutex);
         // Find the starting node ID for the request
         std::string starting_node_id = getStartingNode(request).node_id;
         // Check if the node's buffer exists
         auto& buffer_entry = buffer_map[starting_node_id];
-        auto& buffer_string = std::get<0>(buffer_entry);
-        auto& first_entry_time = std::get<1>(buffer_entry);
-        auto& request_count = std::get<2>(buffer_entry);
-
+        auto& this_buffer_mutex = std::get<0>(buffer_entry);
+        auto& buffer_string = std::get<1>(buffer_entry);
+        auto& first_entry_time = std::get<2>(buffer_entry);
+        auto& request_count = std::get<3>(buffer_entry);
+        std::lock_guard<std::mutex> lock(this_buffer_mutex);
         // Append the request to the buffer
         buffer_string += request;
         // If it's the first entry, record the time
@@ -323,16 +322,17 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
         request_count++;
     }
 
-    void Cache::addRequestToUnitTestBuffer(const std::string& request) {
-        std::lock_guard<std::mutex> lock(unit_test_buffer_mutex);
+    void Cache::addRequestToTestBuffer(const std::string& request) {
+        // std::lock_guard<std::mutex> lock(unit_test_buffer_mutex);
         // Find the starting node ID for the request
         std::string starting_node_id = getStartingNode(request).node_id;
         // Check if the node's buffer exists
-        auto& buffer_entry = unit_test_buffer_map[starting_node_id];
-        auto& buffer_string = std::get<0>(buffer_entry);
-        auto& first_entry_time = std::get<1>(buffer_entry);
-        auto& request_count = std::get<2>(buffer_entry);
-
+        auto& buffer_entry = test_buffer_map[starting_node_id];
+        auto& buffer_mutex = std::get<0>(buffer_entry);
+        auto& buffer_string = std::get<1>(buffer_entry);
+        auto& first_entry_time = std::get<2>(buffer_entry);
+        auto& request_count = std::get<3>(buffer_entry);
+        std::lock_guard<std::mutex> lock(buffer_mutex);
         // Append the request to the buffer
         buffer_string += request;
         // If it's the first entry, record the time
@@ -345,7 +345,6 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
     }
 
     void Cache::routeGetRequestsInBuffer(const std::string& starting_node_id, std::string buffer_string) {
-
             auto hash_it = std::find_if(hash_ring_.begin(), hash_ring_.end(),
                 [&starting_node_id](const auto& pair) {
                     return pair.second.node_id == starting_node_id;
@@ -483,13 +482,13 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
     }
 
     std::string Cache::routeGetRequest(const std::string& request) {
-        addRequestToUnitTestBuffer(request);
-        std::lock_guard<std::mutex> lock(unit_test_buffer_mutex);
+        addRequestToTestBuffer(request);
         std::string starting_node_id = getStartingNode(request).node_id;
         std::string responseToReturn = "";
-        auto it = unit_test_buffer_map.find(starting_node_id);
-        if (it != unit_test_buffer_map.end()) {
-            auto& [buffer_string, first_entry_time, request_count] = it->second;
+        auto it = test_buffer_map.find(starting_node_id);
+        if (it != test_buffer_map.end()) {
+            auto& [buffer_mutex,buffer_string, first_entry_time, request_count] = it->second;
+            std::lock_guard<std::mutex> lock(buffer_mutex);
             // Locate the NodeConnectionDetails pointer in the nodes_ vector
 
             // Find the hash value of the starting node
@@ -563,7 +562,6 @@ std::string Cache::sendToNode(const std::string& node_id,  const std::string& re
                 // Move to the next node in a clockwise direction on the ring
                 current_hash = getNextNodeClockwise(current_hash);
             } while (!buffer_string.empty() && current_hash != starting_hash);  // Continue until we return to the starting node
-            // std::cout<<"GOTOUT"<<std::endl;
             // Handle remaining requests in the buffer
             if(!buffer_string.empty()){
                 throw std::runtime_error("Key does not belong to any node in the routing table.");
@@ -765,35 +763,6 @@ void accept_connections(Cache* cache, int kq_client, std::vector<int> unix_socke
     }
 }
 
-void Cache::process_buffers() {
-    while (!this->isServerStopped()) {
-
-        // Check for buffers ready to process
-        {
-            for (auto it = buffer_map.begin(); it != buffer_map.end();) {
-                std::unique_lock<std::mutex> lock(buffer_mutex);
-                auto now = std::chrono::steady_clock::now();
-                auto current_entry = *it;
-                auto& [starting_node_id, buffer_tuple] = current_entry;
-                auto& [buffer_string, first_entry_time, request_count] = buffer_tuple;
-                // std::cout<<"request_count"<<request_count<<std::endl;
-                // std::cout<<"duration "<<std::chrono::duration_cast<std::chrono::microseconds>(now - first_entry_time).count()<<std::endl;
-                // Process if buffer conditions are met
-                if (request_count >= 0 || 
-                    (std::chrono::duration_cast<std::chrono::microseconds>(now - first_entry_time).count() >= 0 && request_count>0)) {
-                    it = buffer_map.erase(it);
-                    lock.unlock();
-                    this->routeGetRequestsInBuffer(starting_node_id,buffer_string);
-                    lock.lock();
-                }
-                 else {
-                    ++it; // Only increment if the current entry is not erased
-                }
-            }
-        }
-    }
-}
-
 void handle_client_connections(int kq, Cache* cache,int wakeup_pipe[2]) {
     struct timespec timeout;
     timeout.tv_sec = 1;  // 1 second timeout
@@ -801,7 +770,31 @@ void handle_client_connections(int kq, Cache* cache,int wakeup_pipe[2]) {
     struct kevent event;
     struct kevent events[10];
     while (!cache->isServerStopped()) {
+        // process_ready_buffers
+        for (auto it = buffer_map.begin(); it != buffer_map.end();it++) {
+            // Access the current map entry
+            auto& [starting_node_id, buffer_tuple] = *it;
+            auto& [buffer_mutex, buffer_string, first_entry_time, request_count] = buffer_tuple;
 
+            auto now = std::chrono::steady_clock::now();
+
+            // Check buffer conditions
+            if (request_count > 0 || 
+                (std::chrono::duration_cast<std::chrono::microseconds>(now - first_entry_time).count() >= 0 && request_count > 0)) {
+
+                std::string buffer_string_copy;
+                {
+                    // Lock the mutex to safely access the buffer
+                    std::unique_lock<std::mutex> lock(buffer_mutex);
+                    buffer_string_copy = buffer_string;  // Copy the buffer content
+                    buffer_string.clear();               // Clear the original buffer
+                    request_count = 0;
+                    lock.unlock();
+                }
+                // Process the buffer (this function likely sends requests for processing)
+                cache->routeGetRequestsInBuffer(starting_node_id, buffer_string_copy);
+            } 
+        }
         int nev = kevent(kq, NULL, 0, events, 10, NULL);  // Wait for read events
         if (nev == -1) {
             std::cerr << "[Cache] Error with kevent (client event loop): " << strerror(errno) << std::endl;
@@ -1127,16 +1120,13 @@ EV_SET(&event, wakeup_pipe[0], EVFILT_READ, EV_ADD, 0, 0, NULL);
     std::thread clientEventThread([this, kq_client] {
     handle_client_connections(kq_client,this,this->wakeup_pipe);
 });
-    std::thread process_buffers_thread([this] {
-    process_buffers();
-});
+
     std::cout<<"[Cache] Cluster Manager is Active for Cluster ID: "<<this->cluster_id_<< std::endl;
     std::cout << "[Cache] Cache server started and listening on " << ip_ << ":" << port_ << std::endl;
 
 // Join threads when shutting down
     acceptThread.join();
     clientEventThread.join();
-    process_buffers_thread.join();
     cleanup_kqueue(kq_client);
     close(kq_client); 
     std::cout << "[Cache] Server Shutting down..." << std::endl;
