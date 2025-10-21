@@ -171,3 +171,9 @@ Furthermore, we also have a small load test written in jmeter, where it will fir
 
     chmod +x build_and_run_jmeter_load_test.sh    
     ./build_and_run_jmeter_load_test.sh 
+
+## 💖 Support This Project
+If you like this project, you can support me:
+
+- 💸 [PayPal](https://paypal.me/donalshijan)
+- ☕ [Buy Me a Coffee](https://buymeacoffee.com/donalshijan)
